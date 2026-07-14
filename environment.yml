@@ -1,0 +1,21 @@
+name: gene-in
+channels:
+  - bioconda
+  - conda-forge
+dependencies:
+  - dos2unix
+  - spades
+  - velvet
+  - blast
+  - bowtie2
+  - samtools
+  - pyyaml
+  - umi_tools
+  - fastp
+  - mafft
+  - fasttree
+  - iqtree
+  - entrez-direct
+  - ncbi-datasets-cli
+  - unzip
+  - python=3.11

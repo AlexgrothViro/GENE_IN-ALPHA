@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""Validation helpers shared by the CLI and the local dashboard.
+
+The pipeline writes user-controlled sample identifiers into filenames.  Keep
+the validation in one place so the dashboard and shell entry points enforce
+the same contract.
+"""
+
+from __future__ import annotations
+
+import argparse
+import gzip
+import re
+import sys
+from pathlib import Path
+from typing import Iterator, TextIO
+
+
+SAMPLE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
+FASTQ_SUFFIXES = (".fastq", ".fastq.gz", ".fq", ".fq.gz")
+
+
+def validate_sample_id(value: str) -> str:
+    value = (value or "").strip()
+    if not SAMPLE_RE.fullmatch(value):
+        raise ValueError(
+            "identificador de amostra invalido: use 1-80 caracteres "
+            "alfanumericos, '.', '_' ou '-'; o primeiro deve ser alfanumerico"
+        )
+    return value
+
+
+def _open_text(path: Path) -> TextIO:
+    if str(path).lower().endswith(".gz"):
+        return gzip.open(path, "rt", encoding="utf-8", errors="replace")
+    return path.open("r", encoding="utf-8", errors="replace")
+
+
+def _read_fastq_record(handle: TextIO, path: Path, record_no: int):
+    lines = [handle.readline() for _ in range(4)]
+    if not any(lines):
+        return None
+    if any(line == "" for line in lines):
+        raise ValueError(f"FASTQ truncado em {path}, registro {record_no}")
+    header, sequence, plus, quality = [line.rstrip("\r\n") for line in lines]
+    if not header.startswith("@") or not plus.startswith("+"):
+        raise ValueError(f"FASTQ invalido em {path}, registro {record_no}")
+    if not sequence:
+        raise ValueError(f"sequencia vazia em {path}, registro {record_no}")
+    if len(sequence) != len(quality):
+        raise ValueError(f"sequencia/qualidade com tamanhos diferentes em {path}, registro {record_no}")
+    return header[1:].split()[0], sequence
+
+
+def _pair_id(value: str) -> str:
+    return re.sub(r"(?:[/._][12])$", "", value)
+
+
+def validate_fastq(path: Path, mate: Path | None = None) -> int:
+    if not path.is_file() or path.stat().st_size == 0:
+        raise ValueError(f"FASTQ ausente ou vazio: {path}")
+    if mate is not None and (not mate.is_file() or mate.stat().st_size == 0):
+        raise ValueError(f"FASTQ mate ausente ou vazio: {mate}")
+
+    count = 0
+    with _open_text(path) as first:
+        second = _open_text(mate) if mate is not None else None
+        try:
+            while True:
+                left = _read_fastq_record(first, path, count + 1)
+                right = _read_fastq_record(second, mate, count + 1) if second is not None else None
+                if left is None and right is None:
+                    break
+                if left is None or right is None:
+                    raise ValueError(f"FASTQ pareado com numero de reads diferente: {path} / {mate}")
+                if right is not None and _pair_id(left[0]) != _pair_id(right[0]):
+                    raise ValueError(
+                        f"IDs de reads nao pareados no registro {count + 1}: "
+                        f"{left[0]} != {right[0]}"
+                    )
+                count += 1
+        finally:
+            if second is not None:
+                second.close()
+    return count
+
+
+def iter_fasta(path: Path) -> Iterator[tuple[str, str]]:
+    if not path.is_file() or path.stat().st_size == 0:
+        raise ValueError(f"FASTA ausente ou vazio: {path}")
+    name = None
+    sequence: list[str] = []
+    seen: set[str] = set()
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line_no, raw in enumerate(handle, 1):
+            line = raw.strip()
+            if not line:
+                continue
+            if line.startswith(">"):
+                if name is not None:
+                    yield name, "".join(sequence)
+                name = line[1:].split()[0]
+                if not name or name in seen:
+                    raise ValueError(f"header FASTA ausente ou duplicado em {path}, linha {line_no}")
+                seen.add(name)
+                sequence = []
+            else:
+                if name is None:
+                    raise ValueError(f"sequencia FASTA antes do primeiro header em {path}, linha {line_no}")
+                if not re.fullmatch(r"[A-Za-z*.-]+", line):
+                    raise ValueError(f"caracter invalido em FASTA {path}, linha {line_no}")
+                sequence.append(line)
+    if name is None or not sequence:
+        raise ValueError(f"FASTA sem sequencias validas: {path}")
+    yield name, "".join(sequence)
+
+
+def validate_fasta(path: Path) -> int:
+    count = 0
+    for _, sequence in iter_fasta(path):
+        if not sequence:
+            raise ValueError(f"sequencia FASTA vazia: {path}")
+        count += 1
+    return count
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command", required=True)
+    sample = sub.add_parser("sample")
+    sample.add_argument("value")
+    fastq = sub.add_parser("fastq")
+    fastq.add_argument("path", type=Path)
+    fastq.add_argument("--mate", type=Path)
+    fasta = sub.add_parser("fasta")
+    fasta.add_argument("path", type=Path)
+    args = parser.parse_args()
+    try:
+        if args.command == "sample":
+            print(validate_sample_id(args.value))
+        elif args.command == "fastq":
+            print(validate_fastq(args.path, args.mate))
+        else:
+            print(validate_fasta(args.path))
+        return 0
+    except (OSError, ValueError) as exc:
+        print(f"[ERRO] {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

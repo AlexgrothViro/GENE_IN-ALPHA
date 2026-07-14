@@ -1,0 +1,568 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gene-In | Painel de Análise Viral</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div class="hero__content">
+        <img src="/gene-in-logo.png" alt="Gene-In" class="gene-in-main-logo" />
+        <h1 class="hero__subtitle">Recuperação e priorização de fragmentos virais</h1>
+        <p class="hero__tagline">Pipeline acadêmico para triagem de fragmentos virais em dados metagenômicos</p>
+        <p class="hero__institutional">Pipeline Bioinformático • Execução Local</p>
+      </div>
+      <div class="hero__logo">
+      </div>
+    </header>
+
+    <main>
+      <div id="mount-warning" class="notice notice--error" hidden>
+        <strong>Aviso de Performance e Estabilidade:</strong> O projeto está rodando em um disco do Windows. Para evitar lentidão extrema e erros de permissão, é altamente recomendável mover a pasta para o sistema de arquivos nativo do WSL (ex: <code>/home/usuario/Gene-In</code>).
+      </div>
+
+      <div class="tabs">
+        <button class="tab active" data-tab="tab-execucao">Execução</button>
+        <button class="tab" data-tab="tab-analise-avancada">Análise Complementar</button>
+        <button class="tab" data-tab="tab-configuracao">Configuração</button>
+        <button class="tab" data-tab="tab-historico">Histórico</button>
+        <button class="tab tab--experimental" data-tab="tab-evidence-v2">Evidence V2 <span class="alpha-badge">alpha</span></button>
+      </div>
+
+      <section id="tab-evidence-v2" class="tab-panel">
+        <div class="notice evidence-shadow-warning"><strong>Evidence V2 em modo experimental.</strong> Os resultados agregados não substituem a classificação validada da versão 1.1.</div>
+        <p id="evidence-dependencies-status" class="status-line" aria-live="polite"></p>
+        <div class="evidence-toolbar">
+          <button type="button" class="btn btn--primary evidence-mode active" data-mode="simple">Modo simplificado</button>
+          <button type="button" class="btn btn--secondary evidence-mode" data-mode="advanced">Modo avançado</button>
+        </div>
+
+        <section class="section-card">
+          <div class="section-card__header"><h2 class="section-card__title">Análise individual</h2><p class="section-card__description">Use uma amostra FASTQ já importada. Fragmentos de 20–49 bp permanecem apenas exploratórios.</p></div>
+          <form id="evidence-individual-form" class="form-grid">
+            <label class="field"><span class="field__label">Amostra importada</span><select id="evidence-sample" name="sample" class="field__input"></select></label>
+            <label class="field"><span class="field__label">Novo identificador (se enviar FASTQ)</span><input id="evidence-upload-sample" name="upload_sample" class="field__input" placeholder="somente letras, números, ponto, hífen ou sublinhado" /></label>
+            <label class="field"><span class="field__label">R1 (opcional para amostra já importada)</span><input id="evidence-r1-file" name="r1file" type="file" class="field__input" accept=".fastq,.fastq.gz" /></label>
+            <label class="field"><span class="field__label">R2 (opcional para amostra já importada)</span><input id="evidence-r2-file" name="r2file" type="file" class="field__input" accept=".fastq,.fastq.gz" /></label>
+            <label class="field"><span class="field__label">Perfil viral ou banco</span><select id="evidence-target" name="target" class="field__input"></select></label>
+            <label class="field"><span class="field__label">Tipo de biblioteca</span><select name="library_mode" class="field__input"><option value="shotgun">Shotgun</option><option value="amplicon">Amplicon</option><option value="targeted">Targeted</option><option value="unknown">Desconhecido</option></select></label>
+            <label class="field"><span class="field__label">Função da amostra</span><select id="evidence-role" name="role" class="field__input"><option value="sample">Amostra</option><option value="negative_extraction">Controle negativo de extração</option><option value="negative_library">Controle negativo de biblioteca</option><option value="negative_sequencing">Controle negativo de sequenciamento</option><option value="positive">Controle positivo</option></select></label>
+            <label class="field"><span class="field__label">UMI</span><select name="umi_mode" class="field__input"><option value="none">Sem UMI</option><option value="read_name">No nome da read</option><option value="tag">Tag BAM</option></select></label>
+            <label class="field"><span class="field__label">Alvo esperado do controle positivo</span><input id="evidence-expected-target" name="expected_target" class="field__input" disabled /></label>
+            <div class="evidence-advanced-only" hidden>
+              <label class="field"><span class="field__label">Configuração V2</span><input name="config" class="field__input" value="config/evidence_v2.yaml" /></label>
+              <label class="field"><span class="field__label">Montador</span><select name="assembler" class="field__input"><option value="spades">SPAdes automático</option><option value="metaspades">metaSPAdes automático</option><option value="velvet">Velvet</option></select></label>
+            </div>
+            <button class="btn btn--primary" type="submit">Executar Evidence V2 em shadow mode</button>
+          </form>
+          <p id="evidence-form-status" class="status-line" aria-live="polite"></p>
+        </section>
+
+        <section class="section-card">
+          <div class="section-card__header"><h2 class="section-card__title">Assistente de lote</h2><p class="section-card__description">Monte, valide, salve e reabra manifestos sem editar TSV ou YAML.</p></div>
+          <form id="evidence-batch-row-form" class="form-grid evidence-batch-form">
+            <input name="batch_id" class="field__input" placeholder="batch_id" required /><input name="sample_id" class="field__input" placeholder="sample_id" required />
+            <select name="role" class="field__input"><option value="sample">Amostra</option><option value="negative_extraction">Neg. extração</option><option value="negative_library">Neg. biblioteca</option><option value="negative_sequencing">Neg. sequenciamento</option><option value="positive">Positivo</option></select>
+            <select name="library_mode" class="field__input"><option value="shotgun">Shotgun</option><option value="amplicon">Amplicon</option><option value="targeted">Targeted</option><option value="unknown">Desconhecido</option></select>
+            <select name="umi_mode" class="field__input"><option value="none">Sem UMI</option><option value="read_name">UMI/read name</option><option value="tag">UMI/tag</option></select>
+            <label class="field"><span class="field__label">R1</span><input name="r1file" type="file" class="field__input" accept=".fastq,.fastq.gz" required /></label><label class="field"><span class="field__label">R2</span><input name="r2file" type="file" class="field__input" accept=".fastq,.fastq.gz" required /></label><input name="expected_target" class="field__input" placeholder="alvo avaliado/esperado" />
+            <button class="btn btn--secondary" type="submit">Adicionar ao lote</button>
+          </form>
+          <div class="table-wrap"><table class="evidence-table"><thead><tr><th>Amostra</th><th>Função</th><th>Biblioteca</th><th>R1/R2</th><th></th></tr></thead><tbody id="evidence-batch-rows"></tbody></table></div>
+          <div class="action-row"><input id="evidence-manifest-id" class="field__input compact-input" placeholder="ID do manifesto (opcional)" /><button id="evidence-manifest-validate" class="btn btn--secondary" type="button">Validar</button><button id="evidence-manifest-save" class="btn btn--secondary" type="button">Salvar</button><select id="evidence-manifest-list" class="field__input compact-input"><option value="">Manifestos salvos</option></select><button id="evidence-manifest-open" class="btn btn--secondary" type="button">Reabrir</button><button id="evidence-batch-run" class="btn btn--primary" type="button">Executar lote</button></div>
+          <p id="evidence-manifest-status" class="status-line" aria-live="polite"></p>
+        </section>
+
+        <section class="section-card">
+          <div class="section-card__header"><h2 class="section-card__title">Execução estruturada</h2><p class="section-card__description">As 12 etapas refletem o estado transacional real, não uma estimativa do log.</p></div>
+          <ol id="evidence-stage-list" class="evidence-stages"></ol>
+          <div class="action-row"><button id="evidence-cancel" class="btn btn--secondary" type="button" disabled>Cancelar execução</button><span id="evidence-run-status" class="status-line">Nenhuma execução V2 ativa.</span></div>
+        </section>
+
+        <section class="section-card">
+          <div class="section-card__header"><h2 class="section-card__title">Resultados</h2><p class="section-card__description">A saída oficial 1.1 e as dimensões experimentais são apresentadas separadamente.</p></div>
+          <div id="evidence-result-empty" class="notice">Execute uma análise concluída para visualizar resultados.</div>
+          <div id="evidence-results" hidden><h3>Classificação oficial 1.1</h3><pre id="evidence-v1-result" class="report-content"></pre><h3>Dimensões experimentais Evidence V2</h3><div id="evidence-dimensions" class="evidence-dimensions"></div><div id="evidence-summary"></div><h3>Fragmentos exploratórios retidos para revisão</h3><p>Fragmentos de 20–49 bp nunca aparecem isoladamente como identificação ou detecção.</p><div id="evidence-artifacts" class="action-row"></div></div>
+        </section>
+
+        <section class="section-card evidence-advanced-only" hidden>
+          <div class="section-card__header"><h2 class="section-card__title">Configuração efetiva e proveniência</h2><p class="section-card__description">Todos os limiares provisórios são apresentados como “em calibração”.</p></div>
+          <textarea id="evidence-config-editor" class="field__input config-editor" rows="16" spellcheck="false"></textarea><div class="action-row"><button id="evidence-config-validate" class="btn btn--secondary" type="button">Validar configuração</button><span id="evidence-config-status" class="status-line"></span></div>
+        </section>
+      </section>
+
+      <section id="tab-execucao" class="tab-panel active">
+        <!-- Preparação inicial -->
+        <section class="section-card section-card--secondary">
+          <div class="section-card__header">
+            <h2 class="section-card__title">Preparação inicial</h2>
+            <p class="section-card__description">Ações auxiliares para verificação do ambiente de execução e geração de amostras de demonstração.</p>
+          </div>
+          <div class="action-row">
+            <button class="btn btn--secondary" data-action="check_env">Verificar ambiente</button>
+            <button class="btn btn--secondary" data-action="demo">Gerar amostra DEMO</button>
+          </div>
+        </section>
+
+        <!-- Banco viral -->
+        <section class="section-card">
+          <div class="section-card__header">
+            <h2 class="section-card__title">Banco viral</h2>
+            <p class="section-card__description">Define o banco de dados viral de referência para comparação e alinhamento dos fragmentos.</p>
+            <div id="db-status" class="db-status">Banco viral: nenhum selecionado</div>
+          </div>
+          <form id="db-form" class="form-grid">
+            <div class="field">
+              <span class="field__label">Alvo pré-configurado (opcional)</span>
+              <select id="db-target" name="target" class="field__input"></select>
+            </div>
+            <div class="field">
+              <span class="field__label">Outro vírus / banco customizado — query NCBI (opcional)</span>
+              <input name="query" class="field__input" placeholder='Ex.: "Orbivirus"[Organism] OR "Rotavirus A"[Organism] AND refseq[filter]' />
+              <span class="field-hint">Preencha aqui para qualquer vírus fora da lista acima. Aceita qualquer query NCBI válida.</span>
+            </div>
+            <div class="field">
+              <span class="field__label">TaxID (opcional)</span>
+              <input name="taxid" class="field__input" placeholder="Ex.: 12087" />
+            </div>
+            <button class="btn btn--primary" type="submit">Preparar banco viral</button>
+          </form>
+
+        </section>
+
+        <!-- Amostra -->
+        <section class="section-card">
+          <div class="section-card__header">
+            <h2 class="section-card__title">Amostra</h2>
+            <p class="section-card__description">Recebe os dados metagenômicos de entrada em formato FASTQ pareado ou em arquivo compactado ZIP.</p>
+          </div>
+
+          <div class="import-options">
+            <div class="import-option">
+              <h3 class="import-option__title">Opção A — Upload de arquivo (R1/R2 ou .zip)</h3>
+              <form id="upload-form" class="form-grid" enctype="multipart/form-data">
+                <div class="field">
+                  <span class="field__label">Nome da amostra</span>
+                  <input name="sample" class="field__input" required />
+                </div>
+                <div class="field">
+                  <span class="field__label">Arquivo R1 (opcional)</span>
+                  <input name="r1file" type="file" class="field__input" accept=".fastq,.fastq.gz" />
+                </div>
+                <div class="field">
+                  <span class="field__label">Arquivo R2 (opcional)</span>
+                  <input name="r2file" type="file" class="field__input" accept=".fastq,.fastq.gz" />
+                </div>
+                <div class="field">
+                  <span class="field__label">Arquivo .zip (opcional)</span>
+                  <input name="zipfile" type="file" class="field__input" accept=".zip" />
+                </div>
+                <button class="btn btn--primary" type="submit">Importar upload</button>
+              </form>
+            </div>
+
+            <details class="import-option import-option--advanced">
+              <summary class="import-option__summary">Opção B — Caminho local (avançado)</summary>
+              <p class="import-option__hint">Aceita caminho Windows com normalização automática.</p>
+              <form id="import-form" class="form-grid">
+                <div class="field">
+                  <span class="field__label">Nome da amostra</span>
+                  <input name="sample" class="field__input" list="samples" required />
+                </div>
+                <div class="field">
+                  <span class="field__label">Caminho R1</span>
+                  <input name="r1" class="field__input" placeholder="Ex.: C:\\dados\\amostra_R1.fastq.gz" required />
+                </div>
+                <div class="field">
+                  <span class="field__label">Caminho R2</span>
+                  <input name="r2" class="field__input" placeholder="Ex.: C:\\dados\\amostra_R2.fastq.gz" required />
+                </div>
+                <label class="checkbox-field">
+                  <input type="checkbox" name="copy" />
+                  <span>Copiar arquivos (em vez de symlink)</span>
+                </label>
+                <button class="btn btn--primary" type="submit">Importar por caminho</button>
+              </form>
+              <datalist id="samples"></datalist>
+            </details>
+          </div>
+        </section>
+
+        <!-- Montar contigs apenas -->
+        <section class="section-card section-card--assembly-only">
+          <div class="section-card__header">
+            <h2 class="section-card__title">🧩 Montar contigs apenas</h2>
+            <p class="section-card__description">Executa somente a montagem dos contigs a partir dos FASTQs importados. <strong>Não</strong> prepara banco viral, não roda BLAST e não gera relatório completo. Útil para obter contigs rapidamente, testar montadores ou usar em análises externas.</p>
+          </div>
+          <form id="assembly-only-form" class="form-grid">
+            <div class="field">
+              <span class="field__label">Amostra</span>
+              <select id="assembly-only-sample-select" name="sample" class="field__input" required></select>
+            </div>
+            <div class="field">
+              <span class="field__label">Assembler</span>
+              <select name="assembler" class="field__input">
+                <option value="velvet">Velvet (padrão)</option>
+                <option value="spades">SPAdes</option>
+                <option value="metaspades">metaSPAdes</option>
+              </select>
+            </div>
+            <div class="field">
+              <span class="field__label">k-mer</span>
+              <input name="kmer" type="number" class="field__input" min="15" max="99" value="31" />
+            </div>
+            <div class="field">
+              <span class="field__label">Parâmetros SPAdes/metaSPAdes extras (opcional)</span>
+              <input name="spades_params" class="field__input" placeholder="Ex.: --cov-cutoff auto" />
+              <span class="field-hint">Deixe vazio para usar as configurações padrão do montador.</span>
+            </div>
+            <button class="btn btn--assembly-only" type="submit" id="assembly-only-btn">🧩 Montar contigs apenas</button>
+          </form>
+          <div id="assembly-only-status" class="final-status" style="margin-top:0.75rem;"></div>
+        </section>
+
+        <!-- Análise principal -->
+
+        <section class="section-card">
+          <div class="section-card__header">
+            <h2 class="section-card__title">Análise principal</h2>
+            <p class="section-card__description">Executa o pipeline principal abrangendo a remoção de hospedeiro, a montagem e a busca de fragmentos candidatos.</p>
+          </div>
+          <form id="pipeline-form" class="form-grid">
+            <div class="field">
+              <span class="field__label">Amostra</span>
+              <select id="sample-select" name="sample_select" class="field__input" style="margin-bottom: 0.5rem;"></select>
+              <input name="sample" class="field__input" placeholder="Ou informe manualmente" list="samples" />
+            </div>
+            <div class="field">
+              <span class="field__label">Assembler</span>
+              <select name="assembler" class="field__input">
+                <option value="velvet">Velvet (padrão)</option>
+                <option value="spades">SPAdes</option>
+                <option value="metaspades">metaSPAdes</option>
+              </select>
+            </div>
+            <div class="field">
+              <span class="field__label">k-mer</span>
+              <input name="kmer" type="number" class="field__input" min="15" max="99" value="31" />
+            </div>
+            <div class="field field--checkbox">
+              <label class="field__label" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
+                <input name="skip_qc" type="checkbox" />
+                <span>Pular controle de qualidade (fastp)</span>
+              </label>
+            </div>
+            <div class="field">
+              <span class="field__label">Filtro de hospedeiro</span>
+              <select id="host-filter-mode" name="host_filter_mode" class="field__input">
+                <option value="sus_scrofa">Sus scrofa (padrao)</option>
+                <option value="none">Sem filtro de hospedeiro</option>
+                <option value="custom">Indice Bowtie2 customizado</option>
+              </select>
+            </div>
+            <div class="field" data-host-custom hidden>
+              <span class="field__label">Nome do hospedeiro</span>
+              <input name="host_name" class="field__input" placeholder="Ex: Bos taurus" />
+            </div>
+            <div class="field" data-host-custom hidden>
+              <span class="field__label">Prefixo do indice Bowtie2</span>
+              <input id="host-index-prefix" name="host_index_prefix" class="field__input" placeholder="Ex: ref/host/bos_taurus_bt2" />
+              <span id="host-index-status" class="field-hint"></span>
+            </div>
+            <button class="btn btn--primary" type="submit">Executar análise principal</button>
+          </form>
+        </section>
+
+        <!-- Resultados e logs -->
+        <section class="section-card">
+          <div class="section-card__header">
+            <h2 class="section-card__title">Resultados e logs</h2>
+            <p class="section-card__description">Acompanhe o progresso das etapas em tempo real, visualize os logs do console e consulte os relatórios de saída gerados.</p>
+          </div>
+          <div class="status-grid">
+            <div class="status-card">
+              <span class="status-card__label">Status atual</span>
+              <strong id="job-status" class="status-card__value">Aguardando ação</strong>
+            </div>
+            <div class="status-card">
+              <span class="status-card__label">Última execução</span>
+              <strong id="job-action" class="status-card__value">-</strong>
+            </div>
+          </div>
+          <div class="pipeline-progress" id="pipeline-progress" hidden>
+            <h3>Etapas do pipeline</h3>
+            <ul>
+              <li data-stage="qc"><span class="stage-icon">⏳</span> Controle de qualidade</li>
+              <li data-stage="host"><span class="stage-icon">⏳</span> Remoção de hospedeiro</li>
+              <li data-stage="assembly"><span class="stage-icon">⏳</span> Montagem</li>
+              <li data-stage="blast"><span class="stage-icon">⏳</span> BLAST</li>
+            </ul>
+          </div>
+          <button id="cancel-job-btn" class="btn btn--danger" hidden>⏹️ Parar Execução</button>
+          <div id="final-status" class="final-status"></div>
+          <pre id="job-output" class="log-panel log"></pre>
+          <div class="report-viewer" id="report-viewer" hidden>
+            <h3>Resumo do resultado</h3>
+            <pre id="report-content" class="report-content"></pre>
+          </div>
+        </section>
+      </section>
+
+      <section id="tab-analise-avancada" class="tab-panel">
+        <section class="card">
+          <div class="card__header">
+            <h2>Análise complementar de hits/contigs virais</h2>
+            <p>Use após o pipeline principal. Esta etapa ajuda a revisar hits e contigs candidatos por alinhamento e árvore, mas não confirma infecção sozinha.</p>
+          </div>
+
+          <div class="adv-guide-container">
+            <div class="notice notice--success" style="margin-bottom: 0;">
+              <h4 style="margin: 0 0 0.5rem; font-weight: 600;">Quando usar</h4>
+              <ul>
+                <li>Após pipeline principal concluído com sucesso</li>
+                <li>Quando houver hits BLAST ou contigs candidatos</li>
+                <li>Para revisar fragmentos curtos com cautela</li>
+                <li>Para apoiar interpretação científica</li>
+              </ul>
+            </div>
+
+            <div class="notice notice--error" style="margin-bottom: 0;">
+              <h4 style="margin: 0 0 0.5rem; font-weight: 600;">Quando não usar</h4>
+              <ul>
+                <li>Antes do pipeline principal</li>
+                <li>Sem hits BLAST detectados</li>
+                <li>Como diagnóstico definitivo</li>
+              </ul>
+            </div>
+          </div>
+
+          <form id="advanced-form" class="form-grid">
+            <div class="field">
+              <span class="field__label">Amostra</span>
+              <select id="advanced-sample-select" name="sample" class="field__input" required></select>
+            </div>
+            <div class="field">
+              <span class="field__label">Identidade Mínima (%)</span>
+              <input name="min_pident" type="number" step="0.1" min="50" max="100" value="85.0" class="field__input" required />
+              <span class="field-hint">Percentual mínimo de identidade do hit BLAST para incluir na análise. Valores menores = mais sensível, mais ruído.</span>
+            </div>
+            <div class="field">
+              <span class="field__label">Comprimento Mínimo (pb)</span>
+              <input name="min_aln_len" type="number" min="15" max="1000" value="20" class="field__input" required />
+              <span class="field-hint">Comprimento mínimo do alinhamento em pares de bases. Fragmentos abaixo disso são descartados.</span>
+            </div>
+            <div class="field">
+              <span class="field__label">Método Filogenético</span>
+              <select name="method" class="field__input">
+                <option value="auto">IQ-TREE disponível (versão detectada)</option>
+                <option value="iqtree2">IQ-TREE (posicionamento exploratório)</option>
+              </select>
+              <span class="field-hint">A execução é bloqueada quando os gates não são atendidos ou o IQ-TREE está indisponível. Não há fallback silencioso.</span>
+            </div>
+            <div class="field">
+              <span class="field__label">K-mer</span>
+              <input name="kmer" type="number" min="15" max="99" value="31" class="field__input" required />
+              <span class="field-hint">Tamanho do k-mer usado na remontagem local dos contigs candidatos. Use o mesmo valor do pipeline principal.</span>
+            </div>
+            <button class="btn btn--primary" type="submit">Executar Análise Complementar</button>
+          </form>
+        </section>
+
+
+        <section class="card">
+          <div class="card__header"><h2>Resultados da Análise Complementar</h2></div>
+          <div class="status-grid">
+            <div class="status-card">
+              <span class="status-card__label">Status da Análise</span>
+              <strong id="adv-status" class="status-card__value">Aguardando execução</strong>
+            </div>
+          </div>
+          <button id="cancel-adv-btn" class="btn btn--danger" hidden>⏹️ Parar Análise</button>
+          <pre id="adv-output" class="log-panel log" style="display:none;"></pre>
+          <div class="report-viewer" id="adv-report-viewer" hidden>
+            <h3>Relatório de Validação Filogenética</h3>
+            <pre id="adv-report-content" class="report-content"></pre>
+          </div>
+        </section>
+      </section>
+
+      <section id="tab-configuracao" class="tab-panel">
+        <section class="card">
+          <div class="card__header">
+            <h2>Status do ambiente (environment.yml)</h2>
+            <p>Informações sobre o ambiente Conda/micromamba do projeto.</p>
+          </div>
+          <div id="env-status" class="status-grid">
+            <div class="status-card">
+              <span class="status-card__label">Arquivo</span>
+              <strong id="env-file-status" class="status-card__value">Carregando...</strong>
+            </div>
+            <div class="status-card">
+              <span class="status-card__label">Última modificação</span>
+              <strong id="env-mtime" class="status-card__value">-</strong>
+            </div>
+            <div class="status-card">
+              <span class="status-card__label">Caminho</span>
+              <strong id="env-path" class="status-card__value">-</strong>
+            </div>
+          </div>
+          <button class="btn btn--primary" id="rebuild-env-btn">Recriar ambiente</button>
+          <div id="rebuild-status" class="final-status"></div>
+        </section>
+
+        <section class="card">
+          <div class="card__header">
+            <h2>Configuração do pipeline</h2>
+            <p>Edite as variáveis de configuração do arquivo <code>config/picornavirus.env</code>.</p>
+          </div>
+          <form id="config-form">
+            <div class="config-section">
+              <h3>Configuração Básica</h3>
+              <div class="notice notice--info">
+                <strong>Orientação:</strong> Para o uso padrão do pipeline, altere apenas os campos da <strong>Configuração Básica</strong> abaixo. As demais opções avançadas destinam-se a ajustes finos do processamento.
+              </div>
+              <div class="form-grid">
+                <div class="field">
+                  <span class="field__label">ASSEMBLER</span>
+                  <select name="ASSEMBLER" class="field__input">
+                    <option value="">Não definido</option>
+                    <option value="velvet">velvet</option>
+                    <option value="spades">spades</option>
+                    <option value="metaspades">metaspades</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <span class="field__label">THREADS</span>
+                  <input name="THREADS" type="number" class="field__input" placeholder="Ex: 4" />
+                </div>
+                <div class="field">
+                  <span class="field__label">DB</span>
+                  <input name="DB" class="field__input" placeholder="Ex: ptv" />
+                </div>
+                <div class="field">
+                  <span class="field__label">BLAST_EVALUE</span>
+                  <input name="BLAST_EVALUE" class="field__input" placeholder="Ex: 1e-5" />
+                </div>
+                <div class="field">
+                  <span class="field__label">BLAST_MAX_TARGET_SEQS</span>
+                  <input name="BLAST_MAX_TARGET_SEQS" type="number" class="field__input" placeholder="Ex: 20" />
+                </div>
+              </div>
+            </div>
+
+            <details class="config-advanced">
+              <summary>Configuração Avançada</summary>
+              <div class="form-grid">
+                <div class="field">
+                  <span class="field__label">SPADES_MEMORY</span>
+                  <input name="SPADES_MEMORY" type="number" class="field__input" placeholder="Ex: 64" />
+                </div>
+                <div class="field">
+                  <span class="field__label">SPADES_PARAMS</span>
+                  <input name="SPADES_PARAMS" class="field__input" placeholder="Ex: -k 21,33,55,77 -m 64" />
+                </div>
+                <div class="field">
+                  <span class="field__label">VELVET_K</span>
+                  <input name="VELVET_K" type="number" class="field__input" placeholder="Ex: 31" />
+                </div>
+                <div class="field">
+                  <span class="field__label">MIN_CONTIG_LEN</span>
+                  <input name="MIN_CONTIG_LEN" type="number" class="field__input" placeholder="Ex: 50" />
+                </div>
+                <div class="field">
+                  <span class="field__label">READ_TRKG</span>
+                  <input name="READ_TRKG" class="field__input" placeholder="Ex: yes" />
+                </div>
+                <div class="field">
+                  <span class="field__label">RAW_DIR</span>
+                  <input name="RAW_DIR" class="field__input" placeholder="Ex: data/raw" />
+                </div>
+                <div class="field">
+                  <span class="field__label">BLAST_DB</span>
+                  <input name="BLAST_DB" class="field__input" placeholder="Ex: blastdb/ptv" />
+                </div>
+                <div class="field">
+                  <span class="field__label">HOST_REMOVED_DIR</span>
+                  <input name="HOST_REMOVED_DIR" class="field__input" placeholder="Ex: data/host_removed" />
+                </div>
+                <div class="field">
+                  <span class="field__label">HOST_FILTER_ENABLED</span>
+                  <select name="HOST_FILTER_ENABLED" class="field__input">
+                    <option value="">Nao definido</option>
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <span class="field__label">HOST_NAME</span>
+                  <input name="HOST_NAME" class="field__input" placeholder="Ex: Sus scrofa" />
+                </div>
+                <div class="field">
+                  <span class="field__label">HOST_ACCESSION</span>
+                  <input name="HOST_ACCESSION" class="field__input" placeholder="Ex: GCF_000003025.6" />
+                </div>
+                <div class="field">
+                  <span class="field__label">HOST_INDEX_PREFIX</span>
+                  <input name="HOST_INDEX_PREFIX" class="field__input" placeholder="Ex: bowtie2/host" />
+                </div>
+                <div class="field">
+                  <span class="field__label">BIND_HOST</span>
+                  <input name="BIND_HOST" class="field__input" placeholder="Ex: 0.0.0.0" />
+                </div>
+                <div class="field">
+                  <span class="field__label">PORT</span>
+                  <input name="PORT" type="number" class="field__input" placeholder="Ex: 8000" />
+                </div>
+                <div class="field">
+                  <span class="field__label">SAMPLE_NAME</span>
+                  <input name="SAMPLE_NAME" class="field__input" placeholder="Ex: amostra_teste" />
+                </div>
+                <div class="field">
+                  <span class="field__label">SAMPLE_ID</span>
+                  <input name="SAMPLE_ID" class="field__input" placeholder="Ex: amostra_teste" />
+                </div>
+              </div>
+            </details>
+            <button class="btn btn--primary" type="submit" style="margin-top: 1rem;">Salvar configuração</button>
+          </form>
+          <div id="config-status" class="final-status"></div>
+        </section>
+      </section>
+
+      <section id="tab-historico" class="tab-panel">
+        <section class="card">
+          <div class="card__header">
+            <h2>Histórico de execuções</h2>
+          </div>
+          <div id="history-list" class="history-list"></div>
+        </section>
+
+        <section class="card">
+          <div class="card__header">
+            <h2>Manutenção de disco</h2>
+            <p>Remove diretórios intermediários pesados dos montadores (SPAdes/Velvet) em <code>data/assemblies/</code>, preservando os arquivos <code>contigs.fa</code>/<code>contigs.fasta</code>, resultados BLAST, relatórios e histórico de execuções.</p>
+          </div>
+          <button class="btn btn--danger" id="cleanup-btn">🗑️ Limpar Arquivos Temporários</button>
+          <div id="cleanup-status" class="final-status"></div>
+        </section>
+      </section>
+    </main>
+
+    <!-- Modal: Validação Científica (TSV renderizado) -->
+    <div id="tsv-modal-overlay" class="tsv-modal-overlay" hidden>
+      <div class="tsv-modal" role="dialog" aria-modal="true" aria-labelledby="tsv-modal-title">
+        <div class="tsv-modal__header">
+          <h2 id="tsv-modal-title">Validação Científica</h2>
+          <button class="tsv-modal__close" id="tsv-modal-close" aria-label="Fechar">✕ Fechar</button>
+        </div>
+        <div class="tsv-table-wrapper" id="tsv-modal-content">
+          <p class="tsv-empty">Carregando...</p>
+        </div>
+      </div>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
