@@ -68,10 +68,11 @@ def write_no_hit_verdict(outdir, sample, tsv, hits_fa, summary_tsv, refs_fa_out)
 
     verdict_path = os.path.join(outdir, "verdict.txt")
     with open(verdict_path, "w", encoding="utf-8") as out:
-        out.write("verdict\tNO_VIRAL_HITS\n")
+        out.write("analysis_outcome\tNO_EVIDENCE_RECOVERED\n")
+        out.write("evidence_level\tE1\n")
         out.write(f"sample\t{sample}\n")
         out.write(f"source_tsv\t{tsv}\n")
-        out.write("message\tnenhum hit viral detectado pelos criterios informados\n")
+        out.write("message\tnenhuma evidencia recuperada nas condicoes avaliadas; isso nao demonstra ausencia viral\n")
     return verdict_path
 
 def main():
@@ -152,7 +153,7 @@ def main():
         print("hits_summary.tsv:", summary_tsv)
         print("refs.fa:", refs_fa_out)
         print("verdict:", verdict_path)
-        print("VERDICT: nenhum hit viral detectado")
+        print("OUTCOME: NO_EVIDENCE_RECOVERED (não equivale a ausência viral)")
         return
 
     contigs = read_fasta(contigs_fa)

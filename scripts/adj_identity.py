@@ -13,7 +13,7 @@ from logging_utils import log_fatal, log_info, log_warning, set_context
 def parse_fasta_lengths(path: Path):
     lengths = {}
     current = None
-    with path.open("r", encoding="utf-8", errors="replace") as handle:
+    with path.open("r", encoding="utf-8", errors="strict") as handle:
         for line in handle:
             line = line.strip()
             if not line:
@@ -37,7 +37,7 @@ def compute_adjusted(blast_path: Path, contigs_path: Path, out_path: Path):
         log_fatal(f"Erro ao ler arquivo FASTA {contigs_path}: {exc}", "Inspecione o log do pipeline.")
 
     try:
-        with blast_path.open("r", encoding="utf-8", errors="replace") as blast_in, out_path.open(
+        with blast_path.open("r", encoding="utf-8", errors="strict") as blast_in, out_path.open(
             "w", encoding="utf-8", newline=""
         ) as out:
             reader = csv.reader(blast_in, delimiter="\t")

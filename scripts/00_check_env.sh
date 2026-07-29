@@ -48,7 +48,8 @@ detect_genein_env_bin() {
 GENEIN_ENV_BIN="$(detect_genein_env_bin || true)"
 if [[ -n "$GENEIN_ENV_BIN" ]]; then
   export PATH="$GENEIN_ENV_BIN:$PATH"
-  export GENEIN_ENV_DIR="$(dirname "$GENEIN_ENV_BIN")"
+  GENEIN_ENV_DIR="$(dirname "$GENEIN_ENV_BIN")"
+  export GENEIN_ENV_DIR
 fi
 
 CONFIG_FILE="${REPO_ROOT}/config/picornavirus.env"

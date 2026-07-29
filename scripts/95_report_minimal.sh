@@ -42,9 +42,19 @@ ADJ_TSV="${BLAST_OUTDIR}/${SAMPLE}_adj_identity.tsv"
 python3 "$(dirname "$0")/adj_identity.py" --blast "$BLAST" --contigs "$CONTIGS" --out "$ADJ_TSV"
 LABELED_TSV="${BLAST_OUTDIR}/${SAMPLE}_labeled_hits.tsv"
 python3 "$(dirname "$0")/label_hits.py" "$ADJ_TSV" --out "$LABELED_TSV" > /dev/null
+LEGACY_EVIDENCE_JSON="${BLAST_OUTDIR}/${SAMPLE}_legacy_evidence.json"
+ADAPTATION_RUN_ID="${EVIDENCE_RUN_ID:-}"
+if [[ -z "$ADAPTATION_RUN_ID" ]]; then
+  ADAPTATION_RUN_ID="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+fi
+ADAPTATION_ID="report-1.1-${SAMPLE}-${ADAPTATION_RUN_ID}"
+python3 "$(dirname "$0")/evidence/adapt_legacy_evidence.py" --sample "$SAMPLE" --labeled "$LABELED_TSV" \
+  --run-id "legacy-${SAMPLE}-${ADAPTATION_RUN_ID}" --adaptation-id "$ADAPTATION_ID" --out "$LEGACY_EVIDENCE_JSON"
+python3 "$(dirname "$0")/evidence/export_evidence.py" --json "$LEGACY_EVIDENCE_JSON" \
+  --out "${BLAST_OUTDIR}/${SAMPLE}_legacy_evidence_report.md"
 top_adj_summary=""
 if [[ -s "$ADJ_TSV" ]]; then
-  top_adj_summary="$(tail -n +2 "$ADJ_TSV" | sort -t$'\t' -k9,9gr | head -n 1 | awk -F'\t' '{printf "%s vs %s | adj_identity=%s%% | cobertura=%.2f%%",$1,$2,$9,$8*100}')"
+  top_adj_summary="$(python3 "$(dirname "$0")/select_best_adjusted_hit.py" "$ADJ_TSV")"
 fi
 
 # ---------------------------------------------------------------------------
@@ -93,6 +103,9 @@ done <<< "$export_output"
 # ---------------------------------------------------------------------------
 {
   echo "# Summary – $SAMPLE"
+  echo
+  echo "> **Triagem E1 — compatibilidade:** classes históricas abaixo são preservadas somente como \`legacy_label\`."
+  echo "> Elas não afirmam presença, ausência, identidade, confirmação, variante ou linhagem viral."
   echo
 
   # Identificação de controle negativo/background
@@ -167,7 +180,7 @@ done <<< "$export_output"
     echo "- **Total de contigs exportados:** ${_ec_count}"
     echo "- **Referências virais distintas atingidas:** ${_ec_refs}"
     echo
-    echo "### Distribuição por classe de evidência"
+    echo "### Distribuição por legacy_label (teto público E1)"
     echo
     echo "| Classe | Contigs |"
     echo "|---|---:|"
@@ -210,7 +223,7 @@ done <<< "$export_output"
       echo "> [!NOTE]"
       echo "> Sinais de homologia viral foram detectados diretamente a nível de reads individuais de sequenciamento."
       echo "> Esta evidência é **mais fraca que qualquer classe baseada em contig** (não há confirmação estrutural/de contiguidade),"
-      echo "> mas indica a presença física de fragmentos do alvo na amostra."
+      echo "> e registra somente candidatos de homologia em triagem E1, sem afirmar presença física do alvo."
       echo
       echo "- **Total de reads resgatadas:** ${n_reads}"
       echo "- **Arquivo de candidatos:** \`${RESCUE_TSV}\`"

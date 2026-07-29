@@ -43,6 +43,7 @@ INCOMING_SHORT_FRAGMENT_MIN_PID="${SHORT_FRAGMENT_MIN_PID:-}"
 INCOMING_SHORT_FRAGMENT_MIN_QCOV="${SHORT_FRAGMENT_MIN_QCOV:-}"
 INCOMING_EVIDENCE_V2="${EVIDENCE_V2:-}"
 INCOMING_EVIDENCE_CONFIG="${EVIDENCE_CONFIG:-}"
+INCOMING_EVIDENCE_ROOT="${EVIDENCE_ROOT:-}"
 INCOMING_EVIDENCE_LIBRARY_MODE="${EVIDENCE_LIBRARY_MODE:-}"
 INCOMING_EVIDENCE_UMI_MODE="${EVIDENCE_UMI_MODE:-}"
 INCOMING_EVIDENCE_ROLE="${EVIDENCE_ROLE:-}"
@@ -53,6 +54,7 @@ INCOMING_EVIDENCE_PANEL_FASTA="${EVIDENCE_PANEL_FASTA:-}"
 INCOMING_EVIDENCE_PANEL_INDEX="${EVIDENCE_PANEL_INDEX:-}"
 INCOMING_EVIDENCE_RUN_ID="${EVIDENCE_RUN_ID:-}"
 INCOMING_EVIDENCE_BATCH_ID="${EVIDENCE_BATCH_ID:-}"
+INCOMING_EVIDENCE_RESERVATION_TOKEN="${EVIDENCE_RESERVATION_TOKEN:-}"
 CONFIG_FILE="${REPO_ROOT}/config/picornavirus.env"
 LEGACY_CONFIG="${REPO_ROOT}/config.env"
 HAS_CONFIG=0
@@ -119,6 +121,7 @@ if [[ -n "$INCOMING_SHORT_FRAGMENT_MIN_QCOV" ]]; then
 fi
 EVIDENCE_V2="${INCOMING_EVIDENCE_V2:-${EVIDENCE_V2:-false}}"
 EVIDENCE_CONFIG="${INCOMING_EVIDENCE_CONFIG:-${EVIDENCE_CONFIG:-${REPO_ROOT}/config/evidence_v2.yaml}}"
+EVIDENCE_ROOT="${INCOMING_EVIDENCE_ROOT:-${EVIDENCE_ROOT:-${REPO_ROOT}/results/evidence}}"
 EVIDENCE_LIBRARY_MODE="${INCOMING_EVIDENCE_LIBRARY_MODE:-${EVIDENCE_LIBRARY_MODE:-unknown}}"
 EVIDENCE_UMI_MODE="${INCOMING_EVIDENCE_UMI_MODE:-${EVIDENCE_UMI_MODE:-none}}"
 EVIDENCE_ROLE="${INCOMING_EVIDENCE_ROLE:-${EVIDENCE_ROLE:-sample}}"
@@ -129,6 +132,7 @@ EVIDENCE_PANEL_FASTA="${INCOMING_EVIDENCE_PANEL_FASTA:-${EVIDENCE_PANEL_FASTA:-}
 EVIDENCE_PANEL_INDEX="${INCOMING_EVIDENCE_PANEL_INDEX:-${EVIDENCE_PANEL_INDEX:-}}"
 EVIDENCE_RUN_ID="${INCOMING_EVIDENCE_RUN_ID:-${EVIDENCE_RUN_ID:-}}"
 EVIDENCE_BATCH_ID="${INCOMING_EVIDENCE_BATCH_ID:-${EVIDENCE_BATCH_ID:-}}"
+EVIDENCE_RESERVATION_TOKEN="${INCOMING_EVIDENCE_RESERVATION_TOKEN:-}"
 usage() {
   cat <<'USAGE'
 Uso: scripts/20_run_pipeline.sh [opções]
@@ -150,6 +154,7 @@ Opções:
   --rescue-mode             força o resgate de reads se a montagem falhar ou contigs forem muito curtos
   --evidence-v2             gera evidencia agregada 2.0 em shadow mode
   --evidence-config ARQ     configuracao YAML estrita da evidencia 2.0
+  --evidence-root DIR       raiz unica para staging, estado e runs Evidence 2.0
   --batch-manifest TSV      executa um lote por scripts/23_run_batch.sh
   -h, --help                mostra esta ajuda
 Prioridade de configuração:
@@ -276,6 +281,11 @@ while [[ $# -gt 0 ]]; do
       EVIDENCE_CONFIG="$2"
       shift 2
       ;;
+    --evidence-root)
+      require_value "$1" "${2:-}"
+      EVIDENCE_ROOT="$2"
+      shift 2
+      ;;
     --batch-manifest)
       require_value "$1" "${2:-}"
       BATCH_MANIFEST="$2"
@@ -294,7 +304,7 @@ while [[ $# -gt 0 ]]; do
 done
 if [[ -n "$BATCH_MANIFEST" ]]; then
   exec "$SCRIPT_DIR/23_run_batch.sh" --batch-manifest "$BATCH_MANIFEST" --config "$EVIDENCE_CONFIG" \
-    --threads "${THREADS_OVERRIDE:-${THREADS:-4}}"
+    --evidence-root "$EVIDENCE_ROOT" --threads "${THREADS_OVERRIDE:-${THREADS:-4}}"
 fi
 SAMPLE_NAME="${SAMPLE_OVERRIDE:-${SAMPLE_NAME:-${SAMPLE:-amostra_teste}}}"
 SAMPLE_NAME="$(python3 "${SCRIPT_DIR}/lib/input_validation.py" sample "$SAMPLE_NAME")"
@@ -408,9 +418,9 @@ export BLAST_TASK BLAST_WORD_SIZE BLAST_EVALUE
 export CONTIGS SKIP_ASSEMBLY SKIP_QC SKIP_HOST_FILTER RESCUE_MODE HOST_INDEX_PREFIX HOST_NAME HOST_ACCESSION HOST_FILTER_ENABLED
 export SHORT_FRAGMENT_MODE SHORT_FRAGMENT_MIN_LEN SHORT_FRAGMENT_MAX_LEN SHORT_FRAGMENT_DEDUP
 export SHORT_FRAGMENT_BLAST SHORT_FRAGMENT_WORD_SIZE SHORT_FRAGMENT_EVALUE SHORT_FRAGMENT_MIN_PID SHORT_FRAGMENT_MIN_QCOV
-export EVIDENCE_V2 EVIDENCE_CONFIG EVIDENCE_LIBRARY_MODE EVIDENCE_UMI_MODE
+  export EVIDENCE_V2 EVIDENCE_CONFIG EVIDENCE_ROOT EVIDENCE_LIBRARY_MODE EVIDENCE_UMI_MODE EVIDENCE_RESERVATION_TOKEN
 export PIPELINE_CONFIG_LOADED=1
-EVIDENCE_STATE_FILE="${REPO_ROOT}/results/evidence/state/${EVIDENCE_RUN_ID}.json"
+EVIDENCE_STATE_FILE="${EVIDENCE_ROOT}/state/${EVIDENCE_RUN_ID}.json"
 evidence_state_status() {
   [[ "${EVIDENCE_V2,,}" =~ ^(true|1|yes)$ && -n "$EVIDENCE_RUN_ID" && -f "$EVIDENCE_STATE_FILE" ]] || return 0
   local args=(--state "$EVIDENCE_STATE_FILE" status --value "$1")
@@ -502,7 +512,7 @@ if [[ -n "$ADVANCED_KMERS" ]]; then
     SPADES_PARAMS="${SPADES_PARAMS} -k ${ADVANCED_KMERS}"
   fi
 fi
-evidence_state_stage input_validation done "Entrada e parâmetros do pipeline validados."
+evidence_state_stage input_validation "done" "Entrada e parâmetros do pipeline validados."
 echo "Amostra: $SAMPLE_NAME"
 echo "Assembler: $ASSEMBLER"
 echo "Threads: $THREADS"
@@ -557,7 +567,7 @@ if [[ $SKIP_QC -eq 0 && -z "$SAMPLE_SINGLE" && -z "$CONTIGS" ]]; then
 else
   log "[2.5/6] Controle de qualidade (fastp) ignorado"
 fi
-evidence_state_stage quality_control done "Controle de qualidade concluído ou explicitamente ignorado."
+evidence_state_stage quality_control "done" "Controle de qualidade concluído ou explicitamente ignorado."
 
 HOST_FILTER_DISABLED=0
 case "${HOST_FILTER_ENABLED,,}" in
@@ -630,7 +640,7 @@ else
     touch "${ASSEMBLY_CONTIGS}"
   fi
 fi
-evidence_state_stage assembly done "Montagem concluída ou contigs fornecidos validados."
+evidence_state_stage assembly "done" "Montagem concluída ou contigs fornecidos validados."
 
 if [[ "${SHORT_FRAGMENT_MODE:-false}" == "true" ]]; then
   log "[4.5/6] Extração de fragmentos curtos"
@@ -768,12 +778,10 @@ if [[ $TRIGGER_RESCUE -eq 1 && "$INPUT_MODE" == "READS" ]]; then
     assert_unique_fasta_headers "$RESCUE_FA"
     RESCUE_RAW_OUT="${REPO_ROOT}/results/blast/${SAMPLE_NAME}_read_level_vs_db_raw.tsv"
     RESCUE_FINAL_OUT="${REPO_ROOT}/results/blast/${SAMPLE_NAME}_read_level_candidates.tsv"
-    echo "[INFO] Alinhando reads diretamente contra o banco viral (blastn-short)..."
-    RESCUE_RAW_TMP="${RESCUE_RAW_OUT}.tmp.$$"
-    blastn -task blastn-short -query "$RESCUE_FA" -db "$BLAST_DB" \
-      -outfmt '6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore qlen slen' \
-      -max_target_seqs 5 -evalue 1e-5 -num_threads "$THREADS" > "$RESCUE_RAW_TMP"
-    mv -f "$RESCUE_RAW_TMP" "$RESCUE_RAW_OUT"
+    echo "[INFO] Alinhando reads pelo roteador BLAST canônico por comprimento..."
+    python3 "${SCRIPT_DIR}/evidence/blast_router.py" --query "$RESCUE_FA" --db "$BLAST_DB" \
+      --config "$EVIDENCE_CONFIG" --threads "$THREADS" --out-combined "$RESCUE_RAW_OUT" \
+      --provenance "${RESCUE_RAW_OUT%.tsv}_provenance.json"
 
     python3 "${SCRIPT_DIR}/filter_rescue_reads.py" --blast-raw "$RESCUE_RAW_OUT" --out-tsv "$RESCUE_FINAL_OUT"
     rm -f "$RESCUE_RAW_OUT"
@@ -803,7 +811,7 @@ else
   echo "[INFO] Contigs vazios ou montagem ausente. Gerando arquivo BLAST vazio."
   touch "$OUT"
 fi
-evidence_state_stage initial_blast done "BLAST inicial concluído; resultados V2 continuam experimentais."
+evidence_state_stage initial_blast "done" "BLAST inicial concluído; resultados V2 continuam experimentais."
 
 # Remove qualquer link anterior para evitar problemas de dangling symlinks
 rm -f "${OUTDIR}/${SAMPLE_NAME}_vs_db.tsv"
@@ -812,12 +820,12 @@ cp -f "$OUT" "${OUTDIR}/${SAMPLE_NAME}_vs_db.tsv"
 echo "Resultado salvo em: $OUT"
 REPORT="${REPO_ROOT}/results/reports/${SAMPLE_NAME}_summary.md"
 "$SCRIPT_DIR/95_report_minimal.sh" --sample "$SAMPLE_NAME" --contigs "$ASSEMBLY_CONTIGS" --blast "$OUT" --out "$REPORT"
-evidence_state_status running done running
+evidence_state_status running "done" running
 case "${EVIDENCE_V2,,}" in
   true|1|yes)
     EVIDENCE_ARGS=(
       --sample "$SAMPLE_NAME" --queries "$ASSEMBLY_CONTIGS"
-      --config "$EVIDENCE_CONFIG" --evidence-root "${REPO_ROOT}/results/evidence"
+      --config "$EVIDENCE_CONFIG" --evidence-root "$EVIDENCE_ROOT"
       --library-mode "$EVIDENCE_LIBRARY_MODE" --umi-mode "$EVIDENCE_UMI_MODE" --threads "$THREADS"
     )
     EVIDENCE_ARGS+=(--role "$EVIDENCE_ROLE")

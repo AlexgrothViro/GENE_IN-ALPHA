@@ -24,6 +24,7 @@ for cmd in makeblastdb bowtie2-build python3; do command -v "$cmd" >/dev/null 2>
 mkdir -p "$OUT_ROOT/.staging" "$OUT_ROOT/panels"
 STAGING="$OUT_ROOT/.staging/$PANEL_ID"; FINAL="$OUT_ROOT/panels/$PANEL_ID"
 [[ ! -e "$STAGING" && ! -e "$FINAL" ]] || { echo "[FATAL] panel id already exists: $PANEL_ID" >&2; exit 2; }
+mkdir "$STAGING" || { echo "[FATAL] unable to reserve panel id atomically: $PANEL_ID" >&2; exit 2; }
 mkdir -p "$STAGING/blast" "$STAGING/bowtie2"
 ARGS=(); for source in "${SOURCES[@]}"; do ARGS+=(--source "$source"); done
 python3 "$SCRIPT_DIR/evidence/build_competitive_panel.py" "${ARGS[@]}" --out-fasta "$STAGING/panel.fa" --out-labels "$STAGING/labels.tsv"

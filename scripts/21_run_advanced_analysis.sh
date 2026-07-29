@@ -126,7 +126,7 @@ HITS_FA="${OUTDIR}/hits.fa"
 REFS_FA="${OUTDIR}/refs.fa"
 SUMMARY_TSV="${OUTDIR}/hits_summary.tsv"
 
-REPORT_PATH="${REPO_ROOT}/results/reports/${SAMPLE}_advanced_validation.md"
+REPORT_PATH="${REPO_ROOT}/results/reports/${SAMPLE}_advanced_evidence.md"
 mkdir -p "$(dirname "$REPORT_PATH")"
 
 if [[ ! -s "$HITS_FA" ]]; then
@@ -135,7 +135,7 @@ if [[ ! -s "$HITS_FA" ]]; then
 # Relatório de Validação Filogenética Avançada - Amostra: ${SAMPLE}
 
 **Data da Análise:** $(date '+%Y-%m-%d %H:%M:%S')
-**Foco da Análise:** Recuperação e validação de contigs virais curtos e ultra-curtos.
+**Foco da Análise:** Recuperação e avaliação exploratória E1 de contigs candidatos curtos e ultra-curtos.
 
 ## Parâmetros de Filtragem
 *   **Identidade Mínima:** ${MIN_PIDENT}%
@@ -238,7 +238,7 @@ cat <<EOF > "$REPORT_PATH"
 # Relatório de Validação Filogenética Avançada - Amostra: ${SAMPLE}
 
 **Data da Análise:** $(date '+%Y-%m-%d %H:%M:%S')
-**Foco Principal:** Recuperação e validação filogenética de fragmentos curtos e ultra-curtos.
+**Foco Principal:** Recuperação e avaliação filogenética exploratória de fragmentos curtos e ultra-curtos.
 
 ## Resumo dos Parâmetros Científicos
 *   **Identidade Mínima:** ${MIN_PIDENT}%

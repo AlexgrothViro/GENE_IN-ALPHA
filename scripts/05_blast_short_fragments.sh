@@ -32,6 +32,7 @@ EVALUE="${SHORT_FRAGMENT_EVALUE:-1000}"
 MIN_PID="${SHORT_FRAGMENT_MIN_PID:-70}"
 MIN_QCOV="${SHORT_FRAGMENT_MIN_QCOV:-70}"
 THREADS="${THREADS:-4}"
+EVIDENCE_CONFIG="${EVIDENCE_CONFIG:-${REPO_ROOT}/config/evidence_v2.yaml}"
 
 # ---------------------------------------------------------------------------
 # Parsing de argumentos
@@ -66,6 +67,11 @@ while [[ $# -gt 0 ]]; do
     *) echo "[ERRO] opção inválida: $1" >&2; usage; exit 1 ;;
   esac
 done
+
+if [[ "$WORD_SIZE" != "7" || "$EVALUE" != "1000" ]]; then
+  echo "[ERRO] perfis BLAST locais divergentes foram desativados; use o roteador canônico versionado." >&2
+  exit 2
+fi
 
 # ---------------------------------------------------------------------------
 # Validações
@@ -112,7 +118,7 @@ echo "[05] BLAST sensível para fragmentos curtos"
 echo "     Amostra : $SAMPLE"
 echo "     Input   : $INPUT_FASTA ($SEQ_COUNT sequências)"
 echo "     DB      : $BLAST_DB_PATH"
-echo "     Params  : task=blastn-short word_size=$WORD_SIZE evalue=$EVALUE threads=$THREADS"
+echo "     Perfil  : roteamento canônico por comprimento (parâmetros registrados)"
 echo "     Filtros : pident>=${MIN_PID}% qcov>=${MIN_QCOV}%"
 
 # ---------------------------------------------------------------------------
@@ -120,16 +126,9 @@ echo "     Filtros : pident>=${MIN_PID}% qcov>=${MIN_QCOV}%"
 # Formato de saída: qseqid sseqid pident length mismatch gapopen
 #                   qstart qend sstart send evalue bitscore qlen slen
 # ---------------------------------------------------------------------------
-blastn \
-  -task blastn-short \
-  -query "$INPUT_FASTA" \
-  -db "$BLAST_DB_PATH" \
-  -outfmt '6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore qlen slen' \
-  -max_target_seqs 10 \
-  -evalue "$EVALUE" \
-  -word_size "$WORD_SIZE" \
-  -num_threads "$THREADS" \
-  > "$BLAST_RAW"
+python3 "$SCRIPT_DIR/evidence/blast_router.py" --query "$INPUT_FASTA" --db "$BLAST_DB_PATH" \
+  --config "$EVIDENCE_CONFIG" --threads "$THREADS" --out-combined "$BLAST_RAW" \
+  --provenance "${OUTDIR}/${SAMPLE}_short_fragments_blast_provenance.json"
 
 RAW_HITS=$(wc -l < "$BLAST_RAW" 2>/dev/null || echo 0)
 echo "     Hits brutos: $RAW_HITS"

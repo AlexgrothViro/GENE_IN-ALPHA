@@ -72,7 +72,9 @@ fi
 check_file "$R1"
 check_file "$R2"
 
-mkdir -p "$HOST_REMOVED_DIR"
+if [[ ! -d "$HOST_REMOVED_DIR" ]]; then
+  mkdir -p "$HOST_REMOVED_DIR"
+fi
 
 OUT_R1="${HOST_REMOVED_DIR}/${SAMPLE}_R1.host_removed.fastq.gz"
 OUT_R2="${HOST_REMOVED_DIR}/${SAMPLE}_R2.host_removed.fastq.gz"

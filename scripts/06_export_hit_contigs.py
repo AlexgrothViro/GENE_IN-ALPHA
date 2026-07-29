@@ -73,7 +73,7 @@ def read_fasta(path: Path) -> dict:
     seqs: dict[str, str] = {}
     name: str | None = None
     buf: list[str] = []
-    with path.open("r", encoding="utf-8", errors="replace") as fh:
+    with path.open("r", encoding="utf-8", errors="strict") as fh:
         for line in fh:
             line = line.rstrip("\n")
             if line.startswith(">"):
@@ -150,7 +150,7 @@ def load_labeled_hits(
     """
     hits_by_contig: dict[str, list] = {}
 
-    with labeled_path.open("r", encoding="utf-8", errors="replace") as fh:
+    with labeled_path.open("r", encoding="utf-8", errors="strict") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
 
         # ---- Validação de colunas (feita uma vez, no cabeçalho) ----

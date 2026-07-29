@@ -218,37 +218,23 @@ fi
 REF_FASTA="$(resolve_path "${REF_FASTA:-data/ref/${DB}.fa}")"
 BLAST_DB="$(resolve_path "${BLAST_DB:-blastdb/${DB}}")"
 BOWTIE2_INDEX="$(resolve_path "${BOWTIE2_INDEX:-bowtie2/${DB}}")"
+INDEX_MANIFEST="${BLAST_DB}.index-manifest.json"
+BLAST_GENERATION_MANIFEST="${BLAST_DB}.db-manifest.json"
+INDEX_CACHE_HELPER="${SCRIPT_DIR}/evidence/index_cache.py"
+BLAST_PROMOTION_HELPER="${SCRIPT_DIR}/evidence/promote_blast_database.py"
 
-if [[ "$DB" == "custom" && "$SETUP_BOWTIE2" -eq 0 && \
-      -s "${REPO_ROOT}/data/ref/custom.fa" && \
-      -s "${REPO_ROOT}/blastdb/custom.nhr" && \
-      -s "${REPO_ROOT}/blastdb/custom.nin" && \
-      -s "${REPO_ROOT}/blastdb/custom.nsq" && \
-      -f "${REPO_ROOT}/db/custom/metadata.json" ]]; then
-  if METADATA_FILE="${REPO_ROOT}/db/custom/metadata.json" TARGET_QUERY="$DB_QUERY" TARGET_NCBI_DB="${NCBI_DB:-nucleotide}" python3 -c '
-import json, os, sys
-try:
-    with open(os.environ["METADATA_FILE"], encoding="utf-8") as fh:
-        data = json.load(fh)
-    sys.exit(0 if data.get("db_query") == os.environ.get("TARGET_QUERY") and data.get("ncbi_db") == os.environ.get("TARGET_NCBI_DB") else 1)
-except Exception:
-    sys.exit(1)
-' 2>/dev/null; then
-    log_info "Banco customizado BLAST existente compativel; reutilizando cache."
-    exit 0
-  fi
-fi
+blast_database_complete() {
+  command -v blastdbcmd >/dev/null 2>&1 || return 1
+  blastdbcmd -db "$BLAST_DB" -info >/dev/null 2>&1
+}
 
 if [[ "$DB" == "custom" ]]; then
   METADATA_DIR="${REPO_ROOT}/db/custom"
   METADATA_FILE="${METADATA_DIR}/metadata.json"
 
   cache_valid=1
-  if [[ -s "${REPO_ROOT}/data/ref/custom.fa" && \
-        -s "${REPO_ROOT}/blastdb/custom.nhr" && \
-        -s "${REPO_ROOT}/blastdb/custom.nin" && \
-        -s "${REPO_ROOT}/blastdb/custom.nsq" && \
-        -f "$METADATA_FILE" ]] && bowtie2_index_complete "${REPO_ROOT}/bowtie2/custom"; then
+  if [[ -s "${REPO_ROOT}/data/ref/custom.fa" && -f "$METADATA_FILE" ]] && \
+      blast_database_complete && bowtie2_index_complete "${REPO_ROOT}/bowtie2/custom"; then
 
     if METADATA_FILE="$METADATA_FILE" TARGET_QUERY="$DB_QUERY" TARGET_NCBI_DB="${NCBI_DB:-nucleotide}" python3 -c '
 import json, os, sys
@@ -269,7 +255,9 @@ except Exception:
     fi
   fi
 
-  if [[ $cache_valid -eq 0 ]]; then
+  if [[ $cache_valid -eq 0 ]] && python3 "$INDEX_CACHE_HELPER" \
+      --manifest "$INDEX_MANIFEST" --reference "$REF_FASTA" \
+      --builder makeblastdb --builder bowtie2-build; then
     log_info "Banco customizado existente compatível com a query atual. Reutilizando cache."
     log_info "OK (DB=${DB})"
     exit 0
@@ -301,17 +289,16 @@ else
 fi
 
 blast_missing=0
-for ext in nhr nin nsq; do
-  file="${BLAST_DB}.${ext}"
-  if [[ ! -s "$file" ]]; then
-    blast_missing=1
-  elif [[ "$file" -ot "$REF_FASTA" ]]; then
-    blast_missing=1
-  fi
-done
+blast_database_complete || blast_missing=1
+if [[ $blast_missing -eq 0 ]] && ! python3 "$INDEX_CACHE_HELPER" \
+    --manifest "$INDEX_MANIFEST" --reference "$REF_FASTA" --builder makeblastdb; then
+  blast_missing=1
+fi
 
 if [[ $blast_missing -eq 1 ]]; then
   command -v makeblastdb >/dev/null 2>&1 || log_error "makeblastdb não encontrado (blast+)."
+  command -v blastdbcmd >/dev/null 2>&1 || log_error "blastdbcmd não encontrado (blast+)."
+  command -v blastdb_aliastool >/dev/null 2>&1 || log_error "blastdb_aliastool não encontrado (blast+)."
   log_info "Gerando BLAST DB em $BLAST_DB"
   # Remove taxid info from headers to prevent "taxid2offset error for tax id 0"
   DB_INPUT_FASTA="$REF_FASTA"
@@ -322,15 +309,19 @@ if [[ $blast_missing -eq 1 ]]; then
     python3 "${SCRIPT_DIR}/lib/input_validation.py" fasta "$NORMALIZED_FASTA"
     DB_INPUT_FASTA="$NORMALIZED_FASTA"
   fi
-  BLAST_TMP_PREFIX="${BLAST_DB}.tmp.$$"
-  rm -f "${BLAST_TMP_PREFIX}".*
+  BLAST_PARENT="$(dirname "$BLAST_DB")"
+  BLAST_BASENAME="$(basename "$BLAST_DB")"
+  BLAST_BUILD_DIR="$(mktemp -d "${BLAST_PARENT}/.${BLAST_BASENAME}.build.XXXXXX")"
+  BLAST_TMP_PREFIX="${BLAST_BUILD_DIR}/${BLAST_BASENAME}"
   makeblastdb -in "$DB_INPUT_FASTA" -dbtype nucl -out "$BLAST_TMP_PREFIX"
-  for ext in nhr nin nsq; do
-    [[ -s "${BLAST_TMP_PREFIX}.${ext}" ]] || log_error "BLAST DB temporário incompleto (${BLAST_TMP_PREFIX}.${ext})."
-  done
-  for ext in nhr nin nsq; do
-    mv -f "${BLAST_TMP_PREFIX}.${ext}" "${BLAST_DB}.${ext}"
-  done
+  blastdbcmd -db "$BLAST_TMP_PREFIX" -info >/dev/null
+  BLAST_INDEX_MANIFEST_TMP="${BLAST_BUILD_DIR}/index-cache.json"
+  python3 "$INDEX_CACHE_HELPER" --write --manifest "$BLAST_INDEX_MANIFEST_TMP" \
+    --reference "$REF_FASTA" --builder makeblastdb
+  python3 "$BLAST_PROMOTION_HELPER" --build-dir "$BLAST_BUILD_DIR" \
+    --destination "$BLAST_DB" --reference "$REF_FASTA" --manifest "$BLAST_GENERATION_MANIFEST" \
+    --index-manifest-source "$BLAST_INDEX_MANIFEST_TMP"
+  BLAST_BUILD_DIR=""
   [[ -z "$NORMALIZED_FASTA" ]] || rm -f "$NORMALIZED_FASTA"
 else
   log_info "BLAST DB atualizado: $BLAST_DB"
@@ -359,10 +350,13 @@ bt2_files=(
 for file in "${bt2_files[@]}"; do
   if [[ ! -s "$file" ]]; then
     bt2_missing=1
-  elif [[ "$file" -ot "$REF_FASTA" ]]; then
-    bt2_missing=1
   fi
 done
+if [[ $bt2_missing -eq 0 ]] && ! python3 "$INDEX_CACHE_HELPER" \
+    --manifest "$INDEX_MANIFEST" --reference "$REF_FASTA" \
+    --builder makeblastdb --builder bowtie2-build; then
+  bt2_missing=1
+fi
 
 if [[ $bt2_missing -eq 1 ]]; then
   command -v bowtie2-build >/dev/null 2>&1 || log_error "bowtie2-build não encontrado."
@@ -385,6 +379,8 @@ if [[ $bt2_missing -eq 1 ]]; then
   for suffix in 1 2 3 4 rev.1 rev.2; do
     mv -f "${BT2_TMP_PREFIX}.${suffix}.${BUILD_EXT}" "${BOWTIE2_INDEX}.${suffix}.${BUILD_EXT}"
   done
+  python3 "$INDEX_CACHE_HELPER" --write --manifest "$INDEX_MANIFEST" \
+    --reference "$REF_FASTA" --builder makeblastdb --builder bowtie2-build
 else
   log_info "Índice Bowtie2 atualizado: $BOWTIE2_INDEX"
 fi
@@ -393,7 +389,7 @@ if [[ "$DB" == "custom" ]]; then
   METADATA_DIR="${REPO_ROOT}/db/custom"
   METADATA_FILE="${METADATA_DIR}/metadata.json"
   mkdir -p "$METADATA_DIR"
-  METADATA_FILE="$METADATA_FILE" TARGET_QUERY="$DB_QUERY" TARGET_NCBI_DB="${NCBI_DB:-nucleotide}" python3 -c '
+  METADATA_FILE="$METADATA_FILE" TARGET_QUERY="$DB_QUERY" TARGET_NCBI_DB="${NCBI_DB:-nucleotide}" INDEX_MANIFEST="$INDEX_MANIFEST" python3 -c '
 import json, os, datetime
 m = {
     "db": "custom",
@@ -402,6 +398,7 @@ m = {
     "ref_fasta": "data/ref/custom.fa",
     "blast_db": "blastdb/custom",
     "bowtie2_index": "bowtie2/custom",
+    "index_manifest": os.environ.get("INDEX_MANIFEST"),
     "updated_at": datetime.datetime.now().isoformat()
 }
 with open(os.environ["METADATA_FILE"], "w", encoding="utf-8") as f:

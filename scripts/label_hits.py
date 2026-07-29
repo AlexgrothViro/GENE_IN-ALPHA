@@ -77,7 +77,7 @@ def main():
     headers = []
 
     try:
-        with path.open("r", encoding="utf-8", errors="replace") as inp:
+        with path.open("r", encoding="utf-8", errors="strict") as inp:
             reader = csv.DictReader(inp, delimiter="\t")
             headers = reader.fieldnames
             if not headers:

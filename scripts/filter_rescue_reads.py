@@ -31,7 +31,7 @@ def main():
 
     try:
         if raw_path.exists() and raw_path.stat().st_size > 0:
-            with raw_path.open("r", encoding="utf-8", errors="replace") as fh:
+            with raw_path.open("r", encoding="utf-8", errors="strict") as fh:
                 reader = csv.reader(fh, delimiter="\t")
                 for row in reader:
                     if len(row) < 14:
