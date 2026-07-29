@@ -8,6 +8,13 @@ import shutil
 import subprocess
 from pathlib import Path
 
+try:
+    from .common import sha256_file, validate_artifact_manifest
+    from .evidence_contract import PIPELINE_VERSION, validate_document
+except ImportError:
+    from common import sha256_file, validate_artifact_manifest
+    from evidence_contract import PIPELINE_VERSION, validate_document
+
 
 REQUIRED_TSV = {
     "fragment_evidence.tsv",
@@ -22,8 +29,8 @@ REQUIRED_HEADERS = {
     "fragment_evidence.tsv": {"qseqid", "sseqid", "task", "query_covered_bp", "reference_covered_bp", "adj_identity"},
     "locus_evidence.tsv": {"locus_id", "sseqid", "segment", "orientation", "covered_reference_bp", "query_ids"},
     "competitive_hits.tsv": {"qseqid", "task", "target_bitscore", "competitor_bitscore", "delta_bitscore", "specificity_status"},
-    "read_support.tsv": {"sample_id", "unique_templates", "distinct_starts", "support_status"},
-    "coverage.tsv": {"reference", "breadth_1x", "breadth_3x", "mean_depth_genome", "median_depth_covered"},
+    "read_support.tsv": {"sample_id", "reference_id", "category", "locus_id", "query_ids", "unique_templates", "distinct_starts", "support_status"},
+    "coverage.tsv": {"reference_id", "category", "locus_id", "query_ids", "breadth_1x", "breadth_3x", "mean_depth_locus", "median_depth_covered"},
 }
 
 
@@ -51,9 +58,59 @@ def validate_json(path: Path) -> None:
         if not isinstance(value, dict) or value.get("valid") is not True:
             raise ValueError("runtime preflight is not valid")
     elif path.name == "sample_evidence.json":
-        required = {"sample_id", "evidence_level", "specificity_status", "coverage_status", "control_status"}
-        if not isinstance(value, dict) or not required.issubset(value):
-            raise ValueError("sample evidence schema is incomplete")
+        validate_document(value)
+
+
+def validate_commit_metadata(directory: Path, expected_run_id: str | None = None) -> list[str]:
+    errors: list[str] = []
+    manifest_path = directory / "artifact_manifest.json"
+    success_path = directory / "SUCCESS.json"
+    if not manifest_path.is_file():
+        errors.append("missing commit artifact: artifact_manifest.json")
+    if not success_path.is_file():
+        errors.append("missing commit artifact: SUCCESS.json")
+    if errors:
+        return errors
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8", errors="strict"))
+        errors.extend(validate_artifact_manifest(directory, manifest))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        errors.append(f"invalid artifact_manifest.json: {exc}")
+        return errors
+    try:
+        success = json.loads(success_path.read_text(encoding="utf-8", errors="strict"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        errors.append(f"invalid SUCCESS.json: {exc}")
+        return errors
+    if not isinstance(success, dict):
+        return errors + ["SUCCESS.json must be an object"]
+    if success.get("pipeline_version") != PIPELINE_VERSION:
+        errors.append("SUCCESS.json is not an Alpha.2 commit")
+    if success.get("shadow_mode") is not True:
+        errors.append("SUCCESS.json must preserve shadow_mode=true")
+    if success.get("status") not in {"done", "done_with_warning"}:
+        errors.append("SUCCESS.json has no successful terminal status")
+    if not isinstance(success.get("run_id"), str) or not success["run_id"].strip():
+        errors.append("SUCCESS.json run_id is required")
+    if expected_run_id is not None and success.get("run_id") != expected_run_id:
+        errors.append("SUCCESS.json run_id does not match the requested run")
+    files = manifest.get("files", {}) if isinstance(manifest, dict) else {}
+    if success.get("artifact_count") != len(files):
+        errors.append("SUCCESS.json artifact_count does not match the manifest")
+    if success.get("artifact_manifest_sha256") != sha256_file(manifest_path):
+        errors.append("SUCCESS.json artifact manifest hash mismatch")
+    sample_evidence = directory / "sample_evidence.json"
+    if sample_evidence.is_file():
+        try:
+            evidence = json.loads(sample_evidence.read_text(encoding="utf-8", errors="strict"))
+            if evidence.get("run_id") != success.get("run_id"):
+                errors.append("sample evidence run_id does not match SUCCESS.json")
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            errors.append(f"invalid sample_evidence.json during commit verification: {exc}")
+    if "sample_evidence_sha256" in success and sample_evidence.is_file():
+        if success["sample_evidence_sha256"] != sha256_file(sample_evidence):
+            errors.append("SUCCESS.json sample evidence hash mismatch")
+    return errors
 
 
 def validate(directory: Path) -> list[str]:
@@ -85,6 +142,10 @@ def validate(directory: Path) -> list[str]:
             result = subprocess.run([samtools, "quickcheck", "-v", str(bam)], capture_output=True, text=True, check=False)
             if result.returncode != 0:
                 errors.append("samtools quickcheck failed: " + (result.stderr.strip() or result.stdout.strip()))
+    manifest_exists = (directory / "artifact_manifest.json").exists()
+    success_exists = (directory / "SUCCESS.json").exists()
+    if manifest_exists or success_exists:
+        errors.extend(validate_commit_metadata(directory))
     return errors
 
 

@@ -2,28 +2,38 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
 import os
+import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
 try:
-    from .common import read_fasta, read_tsv, write_json_atomic
+    from .common import fsync_directory, read_fasta, read_tsv, sha256_file, write_json_atomic
 except ImportError:
-    from common import read_fasta, read_tsv, write_json_atomic
+    from common import fsync_directory, read_fasta, read_tsv, sha256_file, write_json_atomic
 
 
-def digest(path: Path) -> str:
-    value = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            value.update(chunk)
-    return value.hexdigest()
+REQUIRED_CATEGORIES = {
+    "TARGET_VIRUS", "NEAR_NON_TARGET_VIRUS", "HOST", "VECTOR_ADAPTER",
+    "KNOWN_CONTAMINANT", "SYNTHETIC_SEQUENCE",
+}
+
+
+def tool_version(command: str) -> dict[str, str]:
+    executable = shutil.which(command)
+    if not executable:
+        return {"executable": "UNAVAILABLE", "version": "UNAVAILABLE", "sha256": "UNAVAILABLE"}
+    result = subprocess.run([executable, "--version"], capture_output=True, text=True, check=False)
+    text = (result.stdout or result.stderr).splitlines()
+    return {
+        "executable": str(Path(executable).resolve()), "version": text[0] if text else "UNKNOWN",
+        "sha256": sha256_file(executable),
+    }
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Validate and promote a competitive panel as one transaction")
+    parser = argparse.ArgumentParser(description="Validate and atomically promote a complete competitive panel")
     parser.add_argument("--staging", required=True, type=Path)
     parser.add_argument("--final", required=True, type=Path)
     parser.add_argument("--panel-id", required=True)
@@ -36,6 +46,10 @@ def main() -> None:
     label_rows = read_tsv(labels)
     if not label_rows or {row.get("sseqid") for row in label_rows} != set(sequences):
         raise ValueError("panel labels do not match FASTA identifiers")
+    categories = {row.get("category") for row in label_rows}
+    missing_categories = REQUIRED_CATEGORIES - categories
+    if missing_categories:
+        raise ValueError("competitive panel missing categories: " + ", ".join(sorted(missing_categories)))
     blast_files = [args.staging / "blast" / f"panel.{ext}" for ext in ("nhr", "nin", "nsq")]
     if any(not path.is_file() or path.stat().st_size == 0 for path in blast_files):
         raise ValueError("incomplete BLAST database")
@@ -46,16 +60,25 @@ def main() -> None:
         raise ValueError("incomplete Bowtie2 index")
     files = [fasta, labels, *blast_files, *index_files]
     manifest = {
-        "panel_id": args.panel_id,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "sequence_count": len(sequences),
-        "index_kind": index_files[0].suffix.lstrip("."),
-        "files": {str(path.relative_to(args.staging)): {"size": path.stat().st_size, "sha256": digest(path)} for path in files},
+        "schema_version": "2.0", "panel_id": args.panel_id,
+        "created_at": datetime.now(timezone.utc).isoformat(), "sequence_count": len(sequences),
+        "categories": sorted(categories), "index_kind": index_files[0].suffix.lstrip("."),
+        "constructors": {"makeblastdb": tool_version("makeblastdb"), "bowtie2-build": tool_version("bowtie2-build")},
+        "files": {
+            str(path.relative_to(args.staging)): {"size": path.stat().st_size, "sha256": sha256_file(path)}
+            for path in files
+        },
     }
     write_json_atomic(args.staging / "panel_manifest.json", manifest)
-    write_json_atomic(args.staging / "SUCCESS.json", {"panel_id": args.panel_id, "status": "done", "manifest": "panel_manifest.json"})
+    # SUCCESS is intentionally the last write before atomic promotion.
+    write_json_atomic(args.staging / "SUCCESS.json", {
+        "panel_id": args.panel_id, "status": "done", "shadow_mode": True,
+        "manifest": "panel_manifest.json", "manifest_sha256": sha256_file(args.staging / "panel_manifest.json"),
+    })
+    fsync_directory(args.staging)
     args.final.parent.mkdir(parents=True, exist_ok=True)
     os.replace(args.staging, args.final)
+    fsync_directory(args.final.parent)
     print(args.final)
 
 

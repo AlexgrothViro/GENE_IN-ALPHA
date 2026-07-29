@@ -75,7 +75,7 @@ def load_labels(path: str | None) -> dict[str, dict[str, str]]:
 
 def parse_blast(path: str | Path, task: str) -> list[dict]:
     result = []
-    with Path(path).open("r", encoding="utf-8", errors="replace") as handle:
+    with Path(path).open("r", encoding="utf-8", errors="strict") as handle:
         for line_number, raw in enumerate(handle, 1):
             if not raw.strip():
                 continue

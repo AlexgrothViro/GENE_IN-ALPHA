@@ -3,41 +3,55 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import tempfile
 from pathlib import Path
 
 try:
-    from .common import read_tsv, write_json_atomic
+    from .classify_sample import classify
+    from .common import load_yaml_config, read_tsv, write_json_atomic, write_text_atomic
     from .export_evidence import render
 except ImportError:
-    from common import read_tsv, write_json_atomic
+    from classify_sample import classify
+    from common import load_yaml_config, read_tsv, write_json_atomic, write_text_atomic
     from export_evidence import render
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Apply independent control status to shadow JSON reports")
+    parser = argparse.ArgumentParser(description="Recompute evidence after independent batch-control evaluation")
     parser.add_argument("--statuses", required=True)
     parser.add_argument("--evidence-root", required=True)
+    parser.add_argument("--config", required=True)
     args = parser.parse_args()
     root = Path(args.evidence_root)
-    for status in read_tsv(args.statuses):
-        directory = root / "samples" / status["sample_id"] if (root / "samples").is_dir() else root / status["sample_id"]
+    config = load_yaml_config(args.config)
+    statuses: dict[str, dict[str, str]] = {}
+    for row in read_tsv(args.statuses):
+        sample_id = row["sample_id"]
+        if sample_id in statuses:
+            raise ValueError(f"ambiguous multiple control statuses for sample {sample_id}")
+        statuses[sample_id] = row
+
+    for sample_id, status in statuses.items():
+        directory = root / "samples" / sample_id if (root / "samples").is_dir() else root / sample_id
         json_path = directory / "sample_evidence.json"
-        with json_path.open("r", encoding="utf-8") as handle:
-            data = json.load(handle)
-        data["control_status"] = status["control_status"]
-        data.setdefault("control_metrics", {}).update(status)
-        write_json_atomic(json_path, data)
-        report = directory / "evidence_report.md"
-        fd, tmp = tempfile.mkstemp(prefix=f".{report.name}.", suffix=".tmp", dir=report.parent)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
-                handle.write(render(data))
-            os.replace(tmp, report)
-        finally:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
+        with json_path.open("r", encoding="utf-8", errors="strict") as handle:
+            previous = json.load(handle)
+        result = classify(
+            sample_id,
+            read_tsv(directory / "locus_evidence.tsv"),
+            read_tsv(directory / "competitive_hits.tsv"),
+            read_tsv(directory / "read_support.tsv"),
+            read_tsv(directory / "coverage.tsv"),
+            status["control_status"],
+            previous.get("library_mode", "unknown"),
+            config,
+            True,
+            previous.get("provenance", {}),
+            previous.get("run_id"),
+        )
+        result["controls"]["metrics"] = dict(status)
+        result["control_metrics"] = dict(status)
+        write_json_atomic(json_path, result)
+        write_text_atomic(directory / "evidence_report.md", render(result))
 
 
 if __name__ == "__main__":

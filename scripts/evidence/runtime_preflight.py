@@ -17,8 +17,10 @@ from pathlib import Path
 
 try:
     from .common import load_yaml_config
+    from .environment_lock import validate as validate_environment_lock
 except ImportError:
     from common import load_yaml_config
+    from environment_lock import validate as validate_environment_lock
 
 
 def command_info(name: str) -> dict:
@@ -45,13 +47,15 @@ def command_info(name: str) -> dict:
 
 
 def run(config: Path, assembler: str, umi_mode: str, require_phylogeny: bool,
-        required_commands: list[str]) -> tuple[dict, list[str]]:
+        required_commands: list[str], lockfile: Path | None = None,
+        lock_manifest: Path | None = None) -> tuple[dict, list[str]]:
     errors: list[str] = []
     report = {
         "python": {"executable": sys.executable, "version": sys.version.split()[0]},
         "pyyaml": {"available": False, "version": None},
         "config": str(config),
         "commands": {},
+        "environment_lock": None,
     }
     try:
         import yaml  # type: ignore
@@ -65,6 +69,14 @@ def run(config: Path, assembler: str, umi_mode: str, require_phylogeny: bool,
         errors.append(f"configuração Evidence V2 inválida: {exc}")
     except Exception as exc:
         errors.append(f"config Evidence V2 inválida: {exc}")
+
+    if lockfile is None or lock_manifest is None:
+        errors.append("lockfile Linux e manifesto de hash sao obrigatorios")
+    else:
+        try:
+            report["environment_lock"] = validate_environment_lock(lockfile, lock_manifest)
+        except ValueError as exc:
+            errors.append(f"lockfile invalido: {exc}")
 
     selected = list(required_commands)
     if assembler == "velvet":
@@ -94,9 +106,12 @@ def main() -> int:
     parser.add_argument("--umi-mode", choices=["none", "read_name", "tag"], default="none")
     parser.add_argument("--require-phylogeny", action="store_true")
     parser.add_argument("--require-command", action="append", default=[])
+    parser.add_argument("--lockfile", type=Path)
+    parser.add_argument("--lock-manifest", type=Path)
     parser.add_argument("--json-out", type=Path)
     args = parser.parse_args()
-    report, errors = run(args.config, args.assembler, args.umi_mode, args.require_phylogeny, args.require_command)
+    report, errors = run(args.config, args.assembler, args.umi_mode, args.require_phylogeny,
+                         args.require_command, args.lockfile, args.lock_manifest)
     report["valid"] = not errors
     report["errors"] = errors
     if args.json_out:

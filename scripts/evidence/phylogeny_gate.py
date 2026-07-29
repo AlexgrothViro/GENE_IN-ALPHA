@@ -25,6 +25,34 @@ def informative_sites(sequences: list[str]) -> int:
     return result
 
 
+def candidate_scoped_information(query: str, references: list[str]) -> dict[str, int]:
+    """Count information only where this candidate has an observed nucleotide.
+
+    A column contributes only when the candidate state is represented in the
+    reference panel and an alternative reference state is independently
+    represented. Reference-only columns outside the candidate span cannot
+    inflate the gate.
+    """
+    covered = informative = 0
+    for index, raw_state in enumerate(query):
+        state = raw_state.upper()
+        if state not in "ACGT":
+            continue
+        covered += 1
+        counts: dict[str, int] = {}
+        for reference in references:
+            ref_state = reference[index].upper() if index < len(reference) else "-"
+            if ref_state in "ACGT":
+                counts[ref_state] = counts.get(ref_state, 0) + 1
+        alternatives = [count for base, count in counts.items() if base != state]
+        if counts.get(state, 0) >= 1 and any(count >= 2 for count in alternatives):
+            informative += 1
+    return {
+        "candidate_covered_columns": covered,
+        "informative_sites_within_candidate_span": informative,
+    }
+
+
 def evaluate(alignment_path: str, query_path: str, reference_path: str, config: dict,
              metadata_path: str | None = None, competitive_path: str | None = None,
              iqtree_available: bool = True) -> dict:
@@ -33,13 +61,24 @@ def evaluate(alignment_path: str, query_path: str, reference_path: str, config: 
     references = read_fasta(reference_path)
     phy = config["phylogeny"]
     flags: list[str] = []
-    aligned_queries = [alignment[name] for name in queries if name in alignment]
-    aligned_bp = max((sum(base.upper() in "ACGT" for base in seq) for seq in aligned_queries), default=0)
-    characters = sum(len(seq) for seq in aligned_queries)
-    n_fraction = sum(seq.upper().count("N") for seq in aligned_queries) / characters if characters else 1.0
-    gap_fraction = sum(seq.count("-") for seq in aligned_queries) / characters if characters else 1.0
-    low_complexity = any(sequence_metrics(seq.replace("-", ""))["entropy"] < 1.2 for seq in aligned_queries)
-    informative = informative_sites(list(alignment.values()))
+    missing_queries = sorted(set(queries) - set(alignment))
+    missing_references = sorted(set(references) - set(alignment))
+    if missing_queries:
+        flags.append("QUERY_MISSING_FROM_ALIGNMENT")
+    if missing_references:
+        flags.append("REFERENCE_MISSING_FROM_ALIGNMENT")
+    aligned_queries = {name: alignment[name] for name in queries if name in alignment}
+    aligned_references = [alignment[name] for name in references if name in alignment]
+    per_query = {
+        name: candidate_scoped_information(sequence, aligned_references)
+        for name, sequence in aligned_queries.items()
+    }
+    aligned_bp = min((item["candidate_covered_columns"] for item in per_query.values()), default=0)
+    characters = sum(len(seq) for seq in aligned_queries.values())
+    n_fraction = sum(seq.upper().count("N") for seq in aligned_queries.values()) / characters if characters else 1.0
+    gap_fraction = sum(seq.count("-") for seq in aligned_queries.values()) / characters if characters else 1.0
+    low_complexity = any(sequence_metrics(seq.replace("-", ""))["entropy"] < 1.2 for seq in aligned_queries.values())
+    informative = min((item["informative_sites_within_candidate_span"] for item in per_query.values()), default=0)
     if aligned_bp < int(phy["minimum_aligned_bp"]): flags.append("INSUFFICIENT_ALIGNED_BP")
     if informative < int(phy["minimum_informative_sites"]): flags.append("INSUFFICIENT_INFORMATIVE_SITES")
     if len(references) < int(phy["minimum_references"]): flags.append("INSUFFICIENT_REFERENCES")
@@ -85,7 +124,10 @@ def evaluate(alignment_path: str, query_path: str, reference_path: str, config: 
         "flags": flags,
         "metrics": {
             "aligned_bp": aligned_bp,
+            "candidate_covered_columns": aligned_bp,
             "informative_sites": informative,
+            "informative_sites_within_candidate_span": informative,
+            "per_query": per_query,
             "reference_count": len(references),
             "n_fraction": n_fraction,
             "gap_fraction": gap_fraction,

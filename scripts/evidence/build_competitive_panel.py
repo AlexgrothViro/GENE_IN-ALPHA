@@ -14,7 +14,10 @@ except ImportError:
     from common import read_fasta, write_tsv_atomic
 
 
-CATEGORIES = {"TARGET_VIRUS", "NEAR_NON_TARGET_VIRUS", "HOST", "VECTOR_ADAPTER", "KNOWN_CONTAMINANT"}
+CATEGORIES = {
+    "TARGET_VIRUS", "NEAR_NON_TARGET_VIRUS", "HOST", "VECTOR_ADAPTER",
+    "KNOWN_CONTAMINANT", "SYNTHETIC_SEQUENCE",
+}
 
 
 def safe_token(value: str) -> str:
