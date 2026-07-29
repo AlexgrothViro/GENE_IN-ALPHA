@@ -15,7 +15,7 @@ export LANG=C.UTF-8
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-cd "$ROOT_DIR"
+cd "$ROOT_DIR" || exit 1
 
 # Cores para saída
 GREEN='\033[0;32m'

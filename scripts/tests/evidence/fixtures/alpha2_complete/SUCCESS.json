@@ -1,0 +1,11 @@
+{
+  "artifact_count": 10,
+  "artifact_manifest_sha256": "ef0bb26a852661c09727501d634a8b80ac90748be719a8fa00158ca43971d95f",
+  "pipeline_version": "2.0.0-alpha.2",
+  "policy_version": "2.0-alpha",
+  "run_id": "fixture-alpha2-run",
+  "sample_evidence_sha256": "d74772a056613d7e1f58814a949458b6e3196227a6202ac401dcdb1867b8bb96",
+  "shadow_mode": true,
+  "status": "done",
+  "validated_at": "2026-07-17T00:00:00+00:00"
+}

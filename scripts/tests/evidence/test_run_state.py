@@ -3,12 +3,16 @@ import json
 import subprocess
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "scripts" / "evidence"))
 
-from run_state import initial_state, set_failure, set_stage
+from run_state import (
+    adopt_reserved_state, initial_state, initialize_runner_state, reserve_state,
+    set_failure, set_stage,
+)
 
 
 class RunStateTests(unittest.TestCase):
@@ -43,6 +47,73 @@ class RunStateTests(unittest.TestCase):
             state = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual(state["official_v1_status"], "done")
             self.assertEqual(state["evidence_v2_status"], "running")
+
+    def test_dashboard_reservation_is_adopted_only_with_matching_identity_and_token(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state/run-safe.json"
+            staging = root / ".staging/run-safe"
+            final = root / "runs/run-safe"
+            token = "reservation-token-0123456789abcdef"
+            reserve_state(state_path, "run-safe", "evidence_single", ["sample-a"], None, token)
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["status"] = "running"
+            state["official_v1_status"] = "done"
+            state["evidence_v2_status"] = "running"
+            set_stage(state, "input_validation", "done", None)
+            set_stage(state, "quality_control", "done", None)
+            set_stage(state, "assembly", "done", None)
+            set_stage(state, "initial_blast", "done", None)
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            adopted = adopt_reserved_state(
+                state_path, run_id="run-safe", action="evidence_single", samples=["sample-a"],
+                batch_id=None, reservation_token=token, staging=staging, final=final,
+            )
+            self.assertEqual(adopted["reservation"]["status"], "claimed")
+            with self.assertRaises(FileExistsError):
+                adopt_reserved_state(
+                    state_path, run_id="run-safe", action="evidence_single", samples=["sample-a"],
+                    batch_id=None, reservation_token=token, staging=staging, final=final,
+                )
+
+    def test_two_concurrent_adopters_cannot_claim_the_same_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state/run-safe.json"
+            staging = root / ".staging/run-safe"
+            final = root / "runs/run-safe"
+            token = "reservation-token-0123456789abcdef"
+            reserve_state(state_path, "run-safe", "evidence_single", ["sample-a"], None, token)
+
+            def attempt():
+                return adopt_reserved_state(
+                    state_path, run_id="run-safe", action="evidence_single", samples=["sample-a"],
+                    batch_id=None, reservation_token=token, staging=staging, final=final,
+                )
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = [executor.submit(attempt) for _ in range(2)]
+            successes = sum(future.exception() is None for future in futures)
+            self.assertEqual(successes, 1)
+
+    def test_existing_successful_run_and_previous_state_are_never_overwritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state/run-safe.json"
+            final = root / "runs/run-safe"
+            final.mkdir(parents=True)
+            (final / "SUCCESS.json").write_text('{"status":"done"}\n', encoding="utf-8")
+            token = "reservation-token-0123456789abcdef"
+            reserve_state(state_path, "run-safe", "evidence_single", ["sample-a"], None, token)
+            original = state_path.read_bytes()
+            with self.assertRaises(FileExistsError):
+                adopt_reserved_state(
+                    state_path, run_id="run-safe", action="evidence_single", samples=["sample-a"],
+                    batch_id=None, reservation_token=token, staging=root / ".staging/run-safe", final=final,
+                )
+            with self.assertRaises(FileExistsError):
+                initialize_runner_state(state_path, "run-safe", "evidence_single", ["sample-a"], None)
+            self.assertEqual(state_path.read_bytes(), original)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT / "scripts" / "evidence"))
 sys.path.insert(0, str(ROOT / "scripts" / "lib"))
 
 from common import write_json_atomic
+from classify_sample import classify
 from evidence_dashboard import EvidenceDashboardService
 from run_state import initial_state
 
@@ -51,7 +52,7 @@ class ManifestServiceTests(unittest.TestCase):
     def test_incomplete_run_cannot_export_artifact(self):
         state = self.root / "results/evidence/state/run-safe.json"
         write_json_atomic(state, initial_state("run-safe", "evidence_single", ["sample-a"], None))
-        with self.assertRaises(FileNotFoundError):
+        with self.assertRaises((FileNotFoundError, ValueError)):
             self.service.artifact("run-safe", "sample_evidence")
 
 
@@ -63,19 +64,15 @@ class TransactionTests(unittest.TestCase):
             "fragment_evidence.tsv": "qseqid\tsseqid\ttask\tquery_covered_bp\treference_covered_bp\tadj_identity\n",
             "locus_evidence.tsv": "locus_id\tsseqid\tsegment\torientation\tcovered_reference_bp\tquery_ids\n",
             "competitive_hits.tsv": "qseqid\ttask\ttarget_bitscore\tcompetitor_bitscore\tdelta_bitscore\tspecificity_status\n",
-            "read_support.tsv": "sample_id\tunique_templates\tdistinct_starts\tsupport_status\n",
-            "coverage.tsv": "reference\tbreadth_1x\tbreadth_3x\tmean_depth_genome\tmedian_depth_covered\n",
+            "read_support.tsv": "sample_id\treference_id\tcategory\tlocus_id\tquery_ids\tunique_templates\tdistinct_starts\tsupport_status\n",
+            "coverage.tsv": "reference_id\tcategory\tlocus_id\tquery_ids\tbreadth_1x\tbreadth_3x\tmean_depth_locus\tmedian_depth_covered\n",
         }
         for name, header in headers.items():
             (staging / name).write_text(header, encoding="utf-8")
         (staging / "sample_evidence.json").write_text(
-            json.dumps({
-                "sample_id": "sample-a",
-                "evidence_level": "INCONCLUSIVE",
-                "specificity_status": "NOT_EVALUATED",
-                "coverage_status": "COVERAGE_UNAVAILABLE",
-                "control_status": "UNCONTROLLED",
-            }) + "\n",
+            json.dumps(classify(
+                "sample-a", [], [], [], [], "UNCONTROLLED", "unknown", {}, run_id="run-safe",
+            )) + "\n",
             encoding="utf-8",
         )
         (staging / "runtime_preflight.json").write_text('{"valid": true}\n', encoding="utf-8")
@@ -131,6 +128,23 @@ class TransactionTests(unittest.TestCase):
             ], capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual((final / "old-result.txt").read_text(encoding="utf-8"), "previous\n")
+            self.assertFalse((staging / "SUCCESS.json").exists())
+
+    def test_success_marker_is_removed_if_directory_promotion_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            staging = self.make_staging(root)
+            state = root / "state/run-safe.json"
+            write_json_atomic(state, initial_state("run-safe", "evidence_single", ["sample-a"], None))
+            blocked_parent = root / "blocked-parent"
+            blocked_parent.write_text("not a directory\n", encoding="utf-8")
+            final = blocked_parent / "run-safe"
+            result = subprocess.run([
+                sys.executable, str(ROOT / "scripts/evidence/finalize_run.py"),
+                "--state", str(state), "--staging", str(staging), "--final", str(final),
+            ], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue(staging.is_dir())
             self.assertFalse((staging / "SUCCESS.json").exists())
 
 
