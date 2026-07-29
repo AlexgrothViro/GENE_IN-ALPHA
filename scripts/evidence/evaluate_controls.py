@@ -16,6 +16,7 @@ UMI_MODES = {"none", "read_name", "tag"}
 FIELDS = [
     "batch_id", "sample_id", "target", "control_status", "normalization",
     "sample_rpm", "maximum_negative_rpm", "sample_to_negative_ratio", "shared_sequence",
+    "index_hopping", "donor_sample_id", "donor_to_receiver_ratio",
 ]
 
 
@@ -55,18 +56,16 @@ def evaluate(manifest: list[dict[str, str]], metrics: list[dict[str, str]], rati
         metrics_by_batch_target[(metric["batch_id"], metric.get("target", ""))].append(enriched)
 
     output = []
-    evidence_rank = {"INCONCLUSIVE": 0, "EXPLORATORY_FRAGMENT": 0, "LOCUS_CANDIDATE": 1,
-                     "MULTI_LOCUS_CANDIDATE": 2, "GENOME_SUPPORTED": 3}
     positives = [row for row in all_enriched if row["role"] == "positive"]
     global_positive_failure = len(positives) > 1 and all(
-        evidence_rank.get(row.get("evidence_level", "INCONCLUSIVE"), 0) < 1 for row in positives
+        row.get("analysis_outcome") != "EVIDENCE_RECOVERED" for row in positives
     )
     for (batch_id, target), group in sorted(metrics_by_batch_target.items()):
         negatives = [r for r in group if r["role"].startswith("negative_")]
         positive_failed = any(
             r["role"] == "positive"
             and r.get("expected_target", target) in {"", target}
-            and evidence_rank.get(r.get("evidence_level", "INCONCLUSIVE"), 0) < 1
+            and r.get("analysis_outcome") != "EVIDENCE_RECOVERED"
             for r in group
         )
         for sample in (r for r in group if r["role"] == "sample"):
@@ -79,10 +78,26 @@ def evaluate(manifest: list[dict[str, str]], metrics: list[dict[str, str]], rati
             for negative in negatives:
                 negative_hashes.update(filter(None, negative.get("sequence_hashes", "").split(";")))
             shared = bool(sample_hashes & negative_hashes)
+            donor_id = ""
+            donor_ratio = 0.0
+            # Donors are intentionally evaluated only within this
+            # (batch_id, target) group. Cross-target index hopping is outside
+            # the available target-scoped sequence comparison.
+            for possible_donor in group:
+                if possible_donor["sample_id"] == sample["sample_id"]:
+                    continue
+                donor_hashes = set(filter(None, possible_donor.get("sequence_hashes", "").split(";")))
+                donor_rpm = as_float(possible_donor.get(normalization))
+                ratio = donor_rpm / sample_rpm if sample_rpm > 0 else 0.0
+                if sample_hashes & donor_hashes and ratio >= ratio_threshold and ratio > donor_ratio:
+                    donor_id, donor_ratio = possible_donor["sample_id"], ratio
+            index_hopping = bool(donor_id)
             if global_positive_failure:
                 status = "BATCH_GLOBAL_FAILURE"
             elif positive_failed:
                 status = "TARGET_CONTROL_FAILURE"
+            elif index_hopping:
+                status = "INDEX_HOPPING_SUSPECTED"
             elif not negatives:
                 status = "UNCONTROLLED"
             elif max_negative <= 0:
@@ -99,6 +114,9 @@ def evaluate(manifest: list[dict[str, str]], metrics: list[dict[str, str]], rati
                 "sample_rpm": f"{sample_rpm:.8f}", "maximum_negative_rpm": f"{max_negative:.8f}",
                 "sample_to_negative_ratio": f"{sample_rpm / max_negative:.8f}" if max_negative else "",
                 "shared_sequence": "TRUE" if shared else "FALSE",
+                "index_hopping": "TRUE" if index_hopping else "FALSE",
+                "donor_sample_id": donor_id,
+                "donor_to_receiver_ratio": f"{donor_ratio:.8f}" if donor_id else "",
             })
     for control in (row for row in all_enriched if row["role"] != "sample"):
         normalization = "rpm_nonhost" if control.get("rpm_nonhost", "") not in {"", "NA"} else "rpm_post_qc"
@@ -107,6 +125,7 @@ def evaluate(manifest: list[dict[str, str]], metrics: list[dict[str, str]], rati
             "target": control.get("target", ""), "control_status": "CONTROL_NOT_APPLICABLE",
             "normalization": normalization, "sample_rpm": f"{as_float(control.get(normalization)):.8f}",
             "maximum_negative_rpm": "", "sample_to_negative_ratio": "", "shared_sequence": "FALSE",
+            "index_hopping": "FALSE", "donor_sample_id": "", "donor_to_receiver_ratio": "",
         })
     return output
 

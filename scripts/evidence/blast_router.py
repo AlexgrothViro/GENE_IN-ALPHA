@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+try:
+    from .common import load_yaml_config, read_fasta, sha256_file, write_json_atomic, write_text_atomic
+except ImportError:
+    from common import load_yaml_config, read_fasta, sha256_file, write_json_atomic, write_text_atomic
+
+
+OUTFMT = "6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore qlen slen"
+
+
+def profiles_for_length(length: int, config: dict) -> tuple[str, ...]:
+    blast = config["blast"]
+    if length <= int(blast["short_max_bp"]):
+        return ("short",)
+    if int(blast["dual_mode_min_bp"]) <= length <= int(blast["dual_mode_max_bp"]):
+        return ("short", "conventional")
+    return ("conventional",)
+
+
+def profile_parameters(config: dict) -> dict[str, dict[str, object]]:
+    blast = config["blast"]
+    shared = {
+        "gapopen": 5, "gapextend": 2, "evalue": 1000, "max_target_seqs": 50,
+        "dust": "yes" if blast["explicit_dust"] else "no",
+        "soft_masking": "true" if blast["soft_masking"] else "false",
+    }
+    return {
+        "short": {**shared, "task": "blastn-short", "word_size": 7, "reward": 1, "penalty": -3},
+        "conventional": {**shared, "task": "blastn", "word_size": 11, "reward": 2, "penalty": -3},
+    }
+
+
+def write_fasta(path: Path, records: list[tuple[str, str]]) -> None:
+    with path.open("w", encoding="utf-8", errors="strict", newline="\n") as handle:
+        for name, sequence in records:
+            handle.write(f">{name}\n{sequence}\n")
+
+
+def deduplicate_combined_hits(chunks: list[str]) -> str:
+    """Keep one raw hit per query/reference/orientation/reference interval."""
+    output = []
+    seen = set()
+    for line in "".join(chunks).splitlines():
+        fields = line.split("\t")
+        if len(fields) < 10:
+            raise ValueError("BLAST output has fewer columns than the configured outfmt")
+        start, end = int(fields[8]), int(fields[9])
+        key = (fields[0], fields[1], "+" if start <= end else "-", min(start, end), max(start, end))
+        if key not in seen:
+            seen.add(key)
+            output.append(line)
+    return "\n".join(output) + ("\n" if output else "")
+
+
+def run_router(query: str, database: str, config: dict, threads: int,
+               short_out: Path | None, conventional_out: Path | None,
+               combined_out: Path | None) -> dict:
+    executable = shutil.which("blastn")
+    if not executable:
+        raise RuntimeError("blastn is not available")
+    sequences = read_fasta(query)
+    grouped: dict[str, list[tuple[str, str]]] = {"short": [], "conventional": []}
+    assignments = []
+    for name, sequence in sequences.items():
+        profiles = profiles_for_length(len(sequence), config)
+        assignments.append({"query_id": name, "length": len(sequence), "profiles": list(profiles)})
+        for profile in profiles:
+            grouped[profile].append((name, sequence))
+    parameters = profile_parameters(config)
+    outputs = {"short": short_out, "conventional": conventional_out}
+    combined_chunks: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="genein-blast-router-") as tmp_name:
+        tmp = Path(tmp_name)
+        for profile in ("short", "conventional"):
+            target = outputs[profile]
+            records = grouped[profile]
+            if not records:
+                continue
+            query_path = tmp / f"{profile}.fa"
+            result_path = tmp / f"{profile}.tsv"
+            write_fasta(query_path, records)
+            values = parameters[profile]
+            command = [
+                executable, "-task", str(values["task"]), "-query", str(query_path), "-db", database,
+                "-outfmt", OUTFMT, "-word_size", str(values["word_size"]),
+                "-reward", str(values["reward"]), "-penalty", str(values["penalty"]),
+                "-gapopen", str(values["gapopen"]), "-gapextend", str(values["gapextend"]),
+                "-dust", str(values["dust"]), "-soft_masking", str(values["soft_masking"]),
+                "-max_target_seqs", str(values["max_target_seqs"]), "-evalue", str(values["evalue"]),
+                "-num_threads", str(threads), "-out", str(result_path),
+            ]
+            subprocess.run(command, check=True)
+            content = result_path.read_text(encoding="utf-8", errors="strict")
+            if target:
+                write_text_atomic(target, content)
+            combined_chunks.append(content)
+        for profile, target in outputs.items():
+            if target and not grouped[profile]:
+                write_text_atomic(target, "")
+    if combined_out:
+        write_text_atomic(combined_out, deduplicate_combined_hits(combined_chunks))
+    database_path = Path(database)
+    database_files = sorted(
+        path for path in database_path.parent.glob(database_path.name + ".*") if path.is_file()
+    )
+    version = subprocess.run([executable, "-version"], capture_output=True, text=True, check=False)
+    version_lines = (version.stdout or version.stderr).splitlines()
+    return {
+        "router_schema": "1.0", "blastn_version": version_lines[0] if version_lines else "UNKNOWN",
+        "database_prefix": str(database_path.resolve()),
+        "database_components": {
+            str(path.resolve()): {"size": path.stat().st_size, "sha256": sha256_file(path)}
+            for path in database_files
+        },
+        "profiles": parameters, "assignments": assignments,
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run the canonical length-routed BLAST search")
+    parser.add_argument("--query", required=True)
+    parser.add_argument("--db", required=True)
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--threads", type=int, default=1)
+    parser.add_argument("--out-short", type=Path)
+    parser.add_argument("--out-conventional", type=Path)
+    parser.add_argument("--out-combined", type=Path)
+    parser.add_argument("--provenance", type=Path)
+    args = parser.parse_args()
+    if not any((args.out_short, args.out_conventional, args.out_combined)):
+        parser.error("at least one output is required")
+    result = run_router(args.query, args.db, load_yaml_config(args.config), args.threads,
+                        args.out_short, args.out_conventional, args.out_combined)
+    if args.provenance:
+        write_json_atomic(args.provenance, result)
+
+
+if __name__ == "__main__":
+    main()

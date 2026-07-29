@@ -89,7 +89,7 @@ def load_yaml_config(path: str | Path) -> dict:
 
 
 def read_tsv(path: str | Path) -> list[dict[str, str]]:
-    with Path(path).open("r", encoding="utf-8", errors="replace", newline="") as handle:
+    with Path(path).open("r", encoding="utf-8", errors="strict", newline="") as handle:
         reader = csv.DictReader(handle, delimiter="\t")
         if not reader.fieldnames:
             raise ValueError(f"TSV has no header: {path}")
@@ -102,6 +102,23 @@ def _atomic_target(path: Path) -> tuple[Path, object]:
     return Path(tmp_name), os.fdopen(fd, "w", encoding="utf-8", newline="")
 
 
+def fsync_directory(path: str | Path) -> None:
+    """Durably persist directory metadata where the platform supports it."""
+    directory = Path(path)
+    if os.name == "nt":
+        return
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _flush_and_sync(handle: object) -> None:
+    handle.flush()
+    os.fsync(handle.fileno())
+
+
 def write_tsv_atomic(path: str | Path, rows: Iterable[dict], fieldnames: list[str]) -> None:
     target = Path(path)
     tmp, handle = _atomic_target(target)
@@ -111,7 +128,9 @@ def write_tsv_atomic(path: str | Path, rows: Iterable[dict], fieldnames: list[st
             writer.writeheader()
             for row in rows:
                 writer.writerow({name: row.get(name, "") for name in fieldnames})
+            _flush_and_sync(handle)
         os.replace(tmp, target)
+        fsync_directory(target.parent)
     finally:
         if tmp.exists():
             tmp.unlink()
@@ -124,7 +143,23 @@ def write_json_atomic(path: str | Path, value: object) -> None:
         with handle:
             json.dump(value, handle, indent=2, ensure_ascii=False, sort_keys=True)
             handle.write("\n")
+            _flush_and_sync(handle)
         os.replace(tmp, target)
+        fsync_directory(target.parent)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+def write_text_atomic(path: str | Path, value: str) -> None:
+    target = Path(path)
+    tmp, handle = _atomic_target(target)
+    try:
+        with handle:
+            handle.write(value)
+            _flush_and_sync(handle)
+        os.replace(tmp, target)
+        fsync_directory(target.parent)
     finally:
         if tmp.exists():
             tmp.unlink()
@@ -133,7 +168,7 @@ def write_json_atomic(path: str | Path, value: object) -> None:
 def read_fasta(path: str | Path) -> dict[str, str]:
     sequences: dict[str, str] = {}
     current: str | None = None
-    with Path(path).open("r", encoding="utf-8", errors="replace") as handle:
+    with Path(path).open("r", encoding="utf-8", errors="strict") as handle:
         for raw in handle:
             line = raw.strip()
             if not line:
@@ -199,7 +234,71 @@ def sequence_metrics(sequence: str) -> dict[str, float]:
 
 
 def sha256_text(value: str) -> str:
-    return hashlib.sha256(value.encode("ascii", errors="ignore")).hexdigest()
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def sha256_file(path: str | Path) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def build_artifact_manifest(directory: str | Path, *, exclude: set[str] | None = None) -> dict:
+    root = Path(directory)
+    excluded = {"SUCCESS.json", "artifact_manifest.json"} if exclude is None else exclude
+    files = {}
+    for path in sorted(item for item in root.rglob("*") if item.is_file()):
+        relative = path.relative_to(root).as_posix()
+        if relative in excluded or path.name.startswith(".") or path.name.endswith(".tmp"):
+            continue
+        files[relative] = {"size": path.stat().st_size, "sha256": sha256_file(path)}
+    return {"schema_version": "1.0", "files": files}
+
+
+def validate_artifact_manifest(
+    directory: str | Path, manifest: dict, *, exclude: set[str] | None = None
+) -> list[str]:
+    root = Path(directory)
+    errors: list[str] = []
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != "1.0":
+        return ["artifact manifest schema is invalid"]
+    files = manifest.get("files") if isinstance(manifest, dict) else None
+    if not isinstance(files, dict) or not files:
+        return ["artifact manifest is empty or invalid"]
+    excluded = {"SUCCESS.json", "artifact_manifest.json"} if exclude is None else exclude
+    actual_files = {
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*")
+        if path.is_file()
+        and path.relative_to(root).as_posix() not in excluded
+        and not path.name.startswith(".")
+        and not path.name.endswith(".tmp")
+    }
+    declared_files = set(files)
+    for relative in sorted(actual_files - declared_files):
+        errors.append(f"artifact is missing from manifest: {relative}")
+    for relative in sorted(declared_files - actual_files):
+        errors.append(f"manifest declares an unexpected artifact: {relative}")
+    for relative, expected in files.items():
+        if not isinstance(relative, str) or not isinstance(expected, dict):
+            errors.append(f"invalid artifact manifest entry: {relative!r}")
+            continue
+        path = (root / relative).resolve()
+        try:
+            path.relative_to(root.resolve())
+        except ValueError:
+            errors.append(f"artifact escapes run directory: {relative}")
+            continue
+        if not path.is_file():
+            errors.append(f"manifest artifact is missing: {relative}")
+            continue
+        if path.stat().st_size != expected.get("size"):
+            errors.append(f"artifact size mismatch: {relative}")
+        if sha256_file(path) != expected.get("sha256"):
+            errors.append(f"artifact hash mismatch: {relative}")
+    return errors
 
 
 def as_int(value: str | int | float | None, default: int = 0) -> int:
