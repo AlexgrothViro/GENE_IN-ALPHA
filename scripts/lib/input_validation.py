@@ -32,8 +32,8 @@ def validate_sample_id(value: str) -> str:
 
 def _open_text(path: Path) -> TextIO:
     if str(path).lower().endswith(".gz"):
-        return gzip.open(path, "rt", encoding="utf-8", errors="replace")
-    return path.open("r", encoding="utf-8", errors="replace")
+        return gzip.open(path, "rt", encoding="utf-8", errors="strict")
+    return path.open("r", encoding="utf-8", errors="strict")
 
 
 def _read_fastq_record(handle: TextIO, path: Path, record_no: int):
@@ -91,7 +91,7 @@ def iter_fasta(path: Path) -> Iterator[tuple[str, str]]:
     name = None
     sequence: list[str] = []
     seen: set[str] = set()
-    with path.open("r", encoding="utf-8", errors="replace") as handle:
+    with path.open("r", encoding="utf-8", errors="strict") as handle:
         for line_no, raw in enumerate(handle, 1):
             line = raw.strip()
             if not line:
