@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shlex
 import shutil
 import sys
@@ -28,7 +29,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "lib"))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "evidence"))
 from input_validation import validate_fastq, validate_fasta, validate_sample_id
 from evidence_dashboard import EvidenceDashboardService, atomic_json
-from run_state import initial_state as initial_evidence_state
+from run_state import reserve_state as reserve_evidence_state
 DASHBOARD_DIR = REPO_ROOT / "dashboard"
 LOG_DIR = REPO_ROOT / "logs"
 RUNS_DIR = REPO_ROOT / "results" / "runs"
@@ -53,9 +54,11 @@ def initialize_evidence_dashboard_state(action, params):
         batch_id = manifest["metadata"].get("batch_id")
         state_action = "evidence_batch"
     state_path = EVIDENCE_SERVICE.evidence_root / "state" / f"{run_id}.json"
-    if state_path.exists():
-        raise FileExistsError("run_id Evidence V2 já existe")
-    atomic_json(state_path, initial_evidence_state(run_id, state_action, samples, batch_id))
+    reservation_token = secrets.token_urlsafe(32)
+    reserve_evidence_state(
+        state_path, run_id, state_action, samples, batch_id, reservation_token,
+    )
+    params["reservation_token"] = reservation_token
 
 
 def force_evidence_state_terminal(run_id, status, message, failure_type=None, failed_command=None):
@@ -92,6 +95,26 @@ def force_evidence_state_terminal(run_id, status, message, failure_type=None, fa
     atomic_json(state_path, state)
 
 
+def terminate_process_group(process, signal_value) -> tuple[bool, str | None]:
+    """Signal the complete job group and report failure instead of swallowing it."""
+    try:
+        if os.name != "nt":
+            os.killpg(os.getpgid(process.pid), signal_value)
+        else:
+            process.send_signal(signal_value)
+    except (OSError, ProcessLookupError) as exc:
+        return False, f"could not signal process group: {exc}"
+    return True, None
+
+
+def mark_cancellation_failure(job_id, action, message) -> None:
+    """Make an unverified cancellation a terminal failure, never a success."""
+    with jobs_lock:
+        jobs[job_id].update({"status": "failed", "failure_type": "CANCELLATION_FAILED"})
+    if action in {"evidence_pipeline", "evidence_batch"}:
+        force_evidence_state_terminal(job_id, "failed", message, "CANCELLATION_FAILED")
+
+
 def classify_evidence_failure(output):
     """Map early process failures to stable machine-readable categories."""
     text = "\n".join(output or []).lower()
@@ -106,6 +129,27 @@ def classify_evidence_failure(output):
     if any(token in text for token in ("artefato", "success.json", "quickcheck", "artifact")):
         return "ARTIFACT_INVALID"
     return "TOOL_FAILURE"
+
+
+def evidence_status_summary(run_id):
+    if not run_id:
+        return {}
+    state_path = EVIDENCE_SERVICE.evidence_root / "state" / f"{run_id}.json"
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8", errors="strict"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    v2_status = state.get("evidence_v2_status", state.get("status", "not_started"))
+    official_status = state.get("official_v1_status", "not_started")
+    warning = None
+    if official_status == "done" and v2_status not in {"done", "done_with_warning"}:
+        warning = "A versão oficial 1.1 foi concluída, mas a Evidence V2 experimental não foi concluída; resultado V2 NOT_EVALUABLE."
+    return {
+        "official_v1_status": official_status,
+        "evidence_v2_status": v2_status,
+        "experimental_warning": warning,
+        "experimental_analysis_outcome": state.get("analysis_outcome") or ("NOT_EVALUABLE" if warning else None),
+    }
 
 MAX_OUTPUT_LINES = 4000
 MAX_UPLOAD_BYTES = 500 * 1024 * 1024
@@ -250,6 +294,9 @@ def sanitize_for_log(value):
 def params_for_log(params):
     safe = {}
     for key, value in (params or {}).items():
+        if key == "reservation_token":
+            safe[key] = "[redacted]"
+            continue
         if isinstance(value, str):
             safe[key] = sanitize_for_log(value)
         else:
@@ -917,6 +964,7 @@ def build_command(action, params):
         ]
         env = {
             "EVIDENCE_RUN_ID": str(params.get("run_id") or ""),
+            "EVIDENCE_RESERVATION_TOKEN": str(params.get("reservation_token") or ""),
             "EVIDENCE_LIBRARY_MODE": library_mode,
             "EVIDENCE_UMI_MODE": umi_mode,
             "EVIDENCE_ROLE": role,
@@ -941,7 +989,9 @@ def build_command(action, params):
             "bash", "scripts/23_run_batch.sh", "--batch-manifest", str(manifest_path),
             "--config", str(config_path), "--run-id", str(params.get("run_id") or ""),
         ]
-        return cmd, {}
+        return cmd, {
+            "EVIDENCE_RESERVATION_TOKEN": str(params.get("reservation_token") or ""),
+        }
 
     if action == "assembly_only":
         sample = params.get("sample")
@@ -1036,12 +1086,12 @@ def run_job(job_id, action, params):
 
     # Check if job was cancelled while running
     with jobs_lock:
-        was_cancelled = jobs[job_id].get("status") == "cancelled"
+        was_cancelled = jobs[job_id].get("status") in {"cancelled", "cancelling"}
 
     if was_cancelled:
         logger.info("[job:%s] Ação '%s' cancelada pelo usuário.", job_id, action)
         with jobs_lock:
-            jobs[job_id].update({"returncode": returncode, "finished_at": end_epoch, "output": output_lines,
+            jobs[job_id].update({"status": "cancelled", "returncode": returncode, "finished_at": end_epoch, "output": output_lines,
                                   "tail": "[CANCELADO] A execução foi interrompida pelo usuário."})
         if action in {"evidence_pipeline", "evidence_batch"}:
             force_evidence_state_terminal(job_id, "cancelled", "Execução cancelada; artefatos parciais não foram promovidos.")
@@ -1087,7 +1137,7 @@ def run_job(job_id, action, params):
         "start_epoch": start_epoch,
         "end_epoch": end_epoch,
         "exit_code": returncode,
-        "params": params,
+        "params": {key: value for key, value in params.items() if key != "reservation_token"},
         "versions": tool_versions() if action == "pipeline" else {},
         "paths": {
             "log": str(log_path.relative_to(REPO_ROOT)),
@@ -1096,6 +1146,8 @@ def run_job(job_id, action, params):
         },
     }
     metadata = snapshot_run_artifacts(metadata)
+
+    evidence_summary = evidence_status_summary(job_id) if action in {"evidence_pipeline", "evidence_batch"} else {}
 
     with jobs_lock:
         jobs[job_id].update(
@@ -1106,6 +1158,7 @@ def run_job(job_id, action, params):
                 "finished_at": end_epoch,
                 "run": metadata,
                 "tail": read_tail(log_path, lines=30) if returncode != 0 else "",
+                **evidence_summary,
             }
         )
 
@@ -1183,19 +1236,42 @@ def list_run_history():
         except (json.JSONDecodeError, OSError):
             continue
         status = state.get("status", "failed")
+        try:
+            inspection = EVIDENCE_SERVICE.inspect_run(str(state.get("run_id")))
+        except (FileNotFoundError, ValueError):
+            inspection = {
+                "status": "INCOMPLETE", "valid_alpha2": False, "complete": False,
+                "message": "Execu\u00e7\u00e3o Evidence V2 incompleta.",
+            }
+        evidence_v2_status = state.get("evidence_v2_status", status)
+        if inspection["valid_alpha2"]:
+            display_status = evidence_v2_status
+        elif inspection["status"] == "INCOMPLETE":
+            display_status = evidence_v2_status
+        else:
+            display_status = inspection["status"].lower()
+        official_v1_status = state.get("official_v1_status", "not_started")
+        experimental_warning = None
+        if official_v1_status == "done" and evidence_v2_status not in {"done", "done_with_warning"}:
+            experimental_warning = "A versão oficial 1.1 concluiu, mas a Evidence V2 experimental ficou NOT_EVALUABLE."
         runs.append({
             "id": state.get("run_id"), "run_id": state.get("run_id"),
             "action": state.get("action"), "sample": ", ".join(state.get("sample_ids") or []),
             "batch_id": state.get("batch_id"), "start": state.get("started_at") or state.get("created_at"),
             "end": state.get("finished_at"), "end_epoch": 0,
-            "exit_code": 0 if status in {"done", "done_with_warning"} else 1,
-            "status": status, "shadow_mode": True, "evidence_v2": True,
-            "official_v1_status": state.get("official_v1_status", "not_started"),
-            "evidence_v2_status": state.get("evidence_v2_status", status),
+            "exit_code": 0 if inspection["valid_alpha2"] and status in {"done", "done_with_warning"} else 1,
+            "status": display_status, "shadow_mode": True, "evidence_v2": True,
+            "valid_alpha2": inspection["valid_alpha2"],
+            "compatibility_status": inspection["status"],
+            "compatibility_message": inspection["message"],
+            "job_status": "done" if official_v1_status == "done" else official_v1_status,
+            "official_v1_status": official_v1_status,
+            "evidence_v2_status": evidence_v2_status,
+            "experimental_warning": experimental_warning,
             "failure_type": state.get("failure_type"),
             "failed_stage": state.get("failed_stage"),
             "failure_message": state.get("failure_message"),
-            "complete": (REPO_ROOT / "results" / "evidence" / "runs" / str(state.get("run_id")) / "SUCCESS.json").is_file(),
+            "complete": inspection["complete"],
         })
     runs.sort(key=lambda item: item.get("end_epoch", 0), reverse=True)
     return runs
@@ -1237,6 +1313,9 @@ def json_response(handler, status, payload):
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json")
     handler.send_header("Content-Length", str(len(body)))
+    handler.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+    handler.send_header("Pragma", "no-cache")
+    handler.send_header("Expires", "0")
     handler.end_headers()
     handler.wfile.write(body)
 
@@ -1542,7 +1621,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if not job:
                 logger.warning("Job não encontrado: %s", job_id)
                 return json_response(self, HTTPStatus.NOT_FOUND, {"error": "Job não encontrado"})
-            return json_response(self, HTTPStatus.OK, {"id": job_id, "status": job.get("status"), "output": "".join(job.get("output", [])), "returncode": job.get("returncode"), "command": job.get("command"), "log_path": job.get("log_path"), "run": job.get("run"), "tail": job.get("tail", "")})
+            return json_response(self, HTTPStatus.OK, {"id": job_id, "status": job.get("status"), "output": "".join(job.get("output", [])), "returncode": job.get("returncode"), "command": job.get("command"), "log_path": job.get("log_path"), "run": job.get("run"), "tail": job.get("tail", ""), "official_v1_status": job.get("official_v1_status"), "evidence_v2_status": job.get("evidence_v2_status"), "experimental_warning": job.get("experimental_warning"), "experimental_analysis_outcome": job.get("experimental_analysis_outcome")})
         logger.warning("Rota GET não encontrada: %s", self.path)
         return self.send_error(HTTPStatus.NOT_FOUND, "Rota inválida")
 
@@ -1690,30 +1769,30 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return json_response(self, HTTPStatus.OK, {"ok": False, "message": f"Job não está em execução (status={status})"})
             process = job.get("process")
             with jobs_lock:
-                jobs[job_id]["status"] = "cancelled"
+                jobs[job_id]["status"] = "cancelling"
             if process is not None:
                 import signal as _signal
-                try:
-                    if os.name != "nt":
-                        os.killpg(os.getpgid(process.pid), _signal.SIGTERM)
-                    else:
-                        process.send_signal(getattr(_signal, "CTRL_BREAK_EVENT", _signal.SIGTERM))
+                signal_value = _signal.SIGTERM if os.name != "nt" else getattr(_signal, "CTRL_BREAK_EVENT", _signal.SIGTERM)
+                terminated, error = terminate_process_group(process, signal_value)
+                if terminated:
                     logger.info("[job:%s] SIGTERM enviado para cancelamento.", job_id)
-                except Exception:
-                    pass
+                else:
+                    logger.error("[job:%s] Falha ao cancelar grupo de processos: %s", job_id, error)
+                    mark_cancellation_failure(job_id, job.get("action"), "Falha ao encerrar o grupo de processos; revisão manual é necessária.")
+                    return json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": "Falha ao encerrar grupo de processos", "failure_type": "CANCELLATION_FAILED"})
                 # Give it 3 s to die gracefully, then SIGKILL
                 def _force_kill(p, jid):
                     import time as _time
                     import signal as _signal
                     _time.sleep(3)
-                    try:
-                        if os.name != "nt":
-                            os.killpg(os.getpgid(p.pid), _signal.SIGKILL)
-                        else:
-                            p.kill()
+                    if p.poll() is not None:
+                        return
+                    killed, kill_error = terminate_process_group(p, _signal.SIGKILL)
+                    if killed:
                         logger.info("[job:%s] SIGKILL enviado (processo não encerrou com SIGTERM).", jid)
-                    except Exception:
-                        pass
+                        return
+                    logger.error("[job:%s] Falha ao encerrar grupo de processos: %s", jid, kill_error)
+                    mark_cancellation_failure(jid, jobs.get(jid, {}).get("action"), "Falha ao encerrar o grupo de processos; revisão manual é necessária.")
                 threading.Thread(target=_force_kill, args=(process, job_id), daemon=True).start()
             logger.info("[job:%s] Cancelamento solicitado pelo usuário.", job_id)
             return json_response(self, HTTPStatus.OK, {"ok": True, "message": "Cancelamento solicitado"})

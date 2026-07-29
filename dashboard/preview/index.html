@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gene-In · Preview de UX (estático)</title>
+    <link rel="stylesheet" href="preview.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#screen-root">Pular para o conteúdo</a>
+
+    <!-- Faixa exclusiva do preview: seletor dos 11 estados -->
+    <div class="preview-bar">
+      <span class="preview-tag">PREVIEW</span>
+      <strong>Gene-In · Demonstração de UX</strong>
+      <span>Dados fictícios · sem backend · offline</span>
+      <label for="scenario-select">
+        Estado simulado:
+        <select id="scenario-select" aria-label="Selecionar estado simulado do preview"></select>
+      </label>
+    </div>
+
+    <!-- Cabeçalho + navegação -->
+    <header class="app-header">
+      <div class="app-header__brand">
+        <h1>Gene-In</h1>
+        <span>Recuperação e priorização de fragmentos virais candidatos</span>
+      </div>
+      <nav class="app-header__nav" id="main-nav" aria-label="Navegação principal"></nav>
+    </header>
+
+    <!-- Barra de contexto persistente -->
+    <div class="context-bar" id="context-bar" aria-label="Contexto atual"></div>
+
+    <!-- Área de telas -->
+    <main id="screen-root" tabindex="-1"></main>
+
+    <!-- Modal reutilizável (parâmetros, ajuda) -->
+    <div class="modal-overlay" id="modal-overlay" hidden>
+      <div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <div class="modal__header">
+          <h3 id="modal-title">Detalhes</h3>
+          <button class="modal__close" id="modal-close" aria-label="Fechar">✕</button>
+        </div>
+        <div class="modal__body" id="modal-body"></div>
+      </div>
+    </div>
+
+    <script src="mock-data.js"></script>
+    <script src="preview.js"></script>
+  </body>
+</html>

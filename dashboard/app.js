@@ -478,16 +478,29 @@ const renderHistory = (runs) => {
     const card = document.createElement("article");
     card.className = "history-item";
     if (run.evidence_v2) {
-      const successful = run.status === "done" || run.status === "done_with_warning";
+      const alpha2Valid = run.valid_alpha2 === true;
+      const successful = alpha2Valid && (run.status === "done" || run.status === "done_with_warning");
+      const evidenceLabel = alpha2Valid ? "Evidence V2 Alpha.2 experimental" : (run.compatibility_status || "NOT_EVALUABLE");
+      const openLabel = alpha2Valid ? "Abrir resultado experimental" : "Abrir estado incompat\u00edvel";
       card.innerHTML = `
         <header><h3>${escapeHTML(run.sample) || "(lote V2)"}</h3><span class="badge ${successful ? "ok" : "error"}">${escapeHTML(run.status || "unknown")}</span></header>
         <p><strong>Evidence V2 experimental</strong> · shadow mode · run_id ${escapeHTML(run.run_id)}</p>
         <p><strong>Início:</strong> ${escapeHTML((run.start || "-").replace("T", " "))} • <strong>Fim:</strong> ${escapeHTML((run.end || "-").replace("T", " "))}</p>
         <div class="actions"><button data-evidence-open="1" ${run.complete ? "" : "disabled"}>Abrir resultado experimental</button></div>`;
+      const evidenceHeading = card.querySelector("p strong");
+      if (evidenceHeading) evidenceHeading.textContent = evidenceLabel;
+      const openButton = card.querySelector("button[data-evidence-open]");
+      if (openButton) openButton.textContent = openLabel;
       const statusDetail = document.createElement("p");
       statusDetail.textContent = `1.1: ${run.official_v1_status || "not_started"} · Evidence V2: ${run.evidence_v2_status || run.status}${run.failure_type ? ` · falha: ${run.failure_type}` : ""}`;
       const actions = card.querySelector(".actions");
       if (actions) card.insertBefore(statusDetail, actions);
+      if (run.experimental_warning) {
+        const warning = document.createElement("p");
+        warning.className = "evidence-shadow-warning";
+        warning.textContent = run.experimental_warning;
+        if (actions) card.insertBefore(warning, actions);
+      }
       card.querySelector("button[data-evidence-open]")?.addEventListener("click", async () => {
         activeEvidenceRunId = run.run_id;
         document.querySelectorAll(".tab").forEach((item) => item.classList.toggle("active", item.dataset.tab === "tab-evidence-v2"));
@@ -1209,7 +1222,7 @@ let evidenceBatchRows = [];
 let evidencePollTimer = null;
 
 const evidenceApi = async (url, options = {}) => {
-  const response = await fetch(url, options);
+  const response = await fetch(url, { ...options, cache: "no-store" });
   const contentType = response.headers.get("content-type") || "";
   const data = contentType.includes("json") ? await response.json() : { error: await response.text() };
   if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
@@ -1248,6 +1261,19 @@ const renderEvidenceStages = (state) => {
 const renderEvidenceResult = (result) => {
   const container = getEl("evidence-results");
   const empty = getEl("evidence-result-empty");
+  if (result.valid_alpha2 === false) {
+    if (container) container.hidden = true;
+    if (empty) {
+      empty.hidden = false;
+      const compatibility = result.compatibility || {};
+      empty.textContent = [
+        result.official_v1,
+        result.experimental_warning,
+        `${compatibility.status || "NOT_EVALUABLE"}: ${compatibility.message || "Reexecute a an\u00e1lise para gerar artefatos Alpha.2 completos."}`,
+      ].filter(Boolean).join("\n");
+    }
+    return;
+  }
   if (!result.complete || !result.evidence_v2) {
     if (container) container.hidden = true;
     if (empty) { empty.hidden = false; empty.textContent = "A execução não possui SUCCESS.json e não é considerada concluída."; }
@@ -1264,11 +1290,11 @@ const renderEvidenceResult = (result) => {
       const card = document.createElement("article");
       card.className = "evidence-dimension-card";
       const title = document.createElement("strong"); title.textContent = sample.sample_id;
-      const body = document.createElement("p"); body.textContent = `${sample.evidence_level} · ${sample.specificity_status} · ${sample.coverage_status} · ${sample.control_status}`;
+      const body = document.createElement("p"); body.textContent = `${sample.analysis_outcome || "NOT_EVALUABLE"} · ${sample.evidence_level} · ${sample.specificity_status} · ${sample.coverage_status} · ${sample.control_status}`;
       card.append(title, body); dimensions.append(card);
     });
   } else {
-    ["evidence_level", "specificity_status", "coverage_status", "control_status"].forEach((key) => {
+    ["execution_status", "analysis_outcome", "evidence_level", "specificity_status", "coverage_status", "control_status"].forEach((key) => {
       const card = document.createElement("article"); card.className = "evidence-dimension-card";
       const title = document.createElement("strong"); title.textContent = key;
       const state = document.createElement("p"); state.textContent = value[key] || "NOT_EVALUATED";
@@ -1293,6 +1319,10 @@ const renderEvidenceResult = (result) => {
       lines.push(`Breadth 1×/3×: ${metrics.breadth_1x ?? "NA"} / ${metrics.breadth_3x ?? "NA"}`);
       lines.push(`Profundidade mediana nas posições cobertas: ${metrics.median_depth_covered ?? "NA"}`);
       lines.push(`Controle: ${value.control_status || "UNCONTROLLED"}`);
+      lines.push(`Outcome: ${value.analysis_outcome || "NOT_EVALUABLE"}`);
+      const blocked = (value.promotion_gates || []).filter((gate) => gate.status === "BLOCKED");
+      if (blocked.length) lines.push(`Gates bloqueados: ${blocked.map((gate) => gate.gate_id).join(", ")}`);
+      (value.caveats || []).forEach((caveat) => lines.push(`Ressalva: ${caveat}`));
     }
     lines.push("Conclusão conservadora: evidência computacional experimental; requer revisão e validação complementar.");
     summary.textContent = lines.join("\n");
