@@ -108,6 +108,14 @@ Antes de entrar no fluxo oficial, a tecnologia precisa de finalidade documentada
 - Validação: auditoria de mudanças assistidas e teste determinístico dos invariantes.
 - Revisores: técnico e científico pendentes.
 
+## RADAR-009 — conda-lock
+
+- Fonte: ferramenta local `conda-lock` 4.0.2; decisão: **adotar para reprodutibilidade operacional**.
+- Problema: o YAML declarativo não fixa builds nem hashes dos pacotes Linux.
+- Uso limitado: gerar `conda-linux-64.lock` explícito e seu manifesto de hash; o preflight bloqueia execuções quando qualquer um divergir.
+- Riscos/custo: resolver o ambiente depende de rede e da disponibilidade dos canais; o lock não substitui validação científica em ambiente limpo.
+- Validação: teste de adulterar o lock mantendo timestamps, preflight bloqueado e proveniência com hash do lock.
+
 ## Gatilhos de revisão
 
 - Antes de nova dependência ou fase; antes de alpha/beta/release; trimestralmente durante desenvolvimento; e imediatamente após alerta de segurança, abandono ou mudança de licença.

@@ -13,7 +13,8 @@ Após executar `make pipeline SAMPLE=<id>` ou `make run ...`, os principais arte
 | `data/assemblies/{SAMPLE}_assembly/contigs.fa` | Contigs montados da amostra. |
 | `results/blast/{SAMPLE}_vs_db.tsv` | Hits BLAST brutos. |
 | `results/blast/{SAMPLE}_adj_identity.tsv` | Hits com identidade ajustada (`adj_identity`). |
-| `results/blast/{SAMPLE}_labeled_hits.tsv` | Hits classificados com `evidence_class` e `risk_note`. |
+| `results/blast/{SAMPLE}_labeled_hits.tsv` | Artefato histórico de compatibilidade; a classe é `legacy_label`, com teto E1. |
+| `results/evidence/runs/{RUN_ID}/sample_evidence.json` | Artefato canônico 2.0: estado de execução, outcome, E1/E2/E3/NOT_EVALUABLE, gates, caveats e proveniência. |
 | `results/reports/{SAMPLE}_summary.md` | Relatório final em Markdown. |
 
 ---
@@ -29,43 +30,15 @@ Esses arquivos ajudam na trilha de auditoria da execução (parâmetros, horári
 
 ---
 
-## Classes de evidência (classificação operacional)
+## Contrato de interpretação
 
-A classificação em `results/blast/{SAMPLE}_labeled_hits.tsv` segue os critérios abaixo (compatíveis com `scripts/label_hits.py`):
+O contrato canônico 2.0 separa `execution_status`, `analysis_outcome` e `evidence_level`. Na alpha.2, E2/E3 são inalcançáveis e E4 não existe na saída. Um resultado sem candidatos não representa ausência; uma etapa inválida é `NOT_EVALUABLE`.
 
-### `STRONG`
+Execuções Evidence V2 anteriores à Alpha.2 são artefatos históricos incompatíveis, mesmo que contenham `SUCCESS.json`. O dashboard exige a versão exata do contrato, todos os campos/headers obrigatórios, `artifact_manifest.json` completo, hashes verificáveis e `shadow_mode=true`. Se qualquer requisito falhar, retorna `LEGACY_INCOMPATIBLE` ou `ALPHA2_INVALID` com `NOT_EVALUABLE`, preserva os arquivos e solicita reexecução. Nenhum campo é preenchido retroativamente e nenhuma classe antiga é promovida automaticamente para E1.
 
-- `length >= 80`
-- `pident >= 90`
-- `adj_identity >= 70`
-- `evalue <= 1e-10`
+Os diretórios `results/evidence/runs/79f201633acf43b9a395c23725d2e0f0` e `results/evidence/runs/8e612a9309d94d8eae8dca0d291af199` devem ser tratados como históricos Alpha.1 e mantidos para auditoria até que as respectivas análises sejam reexecutadas.
 
-### `STRONG_DIVERGENT`
-
-- `length >= 1000` ou `qlen >= 1000`
-- `aln_cov >= 0.80`
-- `80 <= pident < 90`
-- `evalue <= 1e-10`
-
-### `MODERATE`
-
-- `50 <= length < 80`
-- `pident >= 85`
-- `adj_identity >= 60`
-- `evalue <= 1e-5`
-
-### `WEAK_RECOVERABLE`
-
-- `20 <= length < 50`
-- `pident >= 90`
-- `bitscore >= 35`
-- exige revisão manual
-
-### `REVIEW`
-
-- todos os demais casos
-
-> `risk_note` é um alerta de cautela para interpretação, e não um erro de execução.
+As classes históricas de `labeled_hits.tsv` são mantidas somente para leitura de compatibilidade. Elas não constituem níveis públicos e não podem produzir afirmações de presença, ausência, identidade, confirmação, variante ou linhagem.
 
 ---
 

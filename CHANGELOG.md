@@ -7,6 +7,25 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 
 ---
 
+## [2.0.0-alpha.2] — Contrato único e contenção em shadow mode
+
+### Corrigido
+
+- O contrato público agora separa estado de execução, outcome da análise e nível de evidência; a política alpha.2 só permite E1 ou NOT_EVALUABLE.
+- Suporte e cobertura passaram a preservar referência, categoria, locus, orientação e consultas associadas antes da classificação.
+- Métricas de informação passaram a operar somente no span efetivamente coberto pelo candidato.
+- Controle de lote recompõe a decisão e bloqueia padrões rastreáveis de transferência entre amostras.
+- Leituras científicas usam UTF-8 estrito; entradas SAM estruturalmente inválidas interrompem o estágio.
+- O roteador de busca por comprimento é compartilhado por fluxos auxiliares e V2.
+- Promoções usam manifesto com hashes, sincronização e `SUCCESS.json` escrito por último.
+
+### Segurança de interpretação
+
+- Artefatos Evidence V2 anteriores ao contrato Alpha.2 são classificados como `LEGACY_INCOMPATIBLE`/`NOT_EVALUABLE`, preservados para auditoria e nunca adaptados automaticamente para E1. Qualquer adaptação excepcional exige comando explícito, identificador e hash da origem.
+- ML, variante, linhagem e E4 continuam fora do escopo desta versão.
+
+---
+
 ## [1.1.0] — Gene-In 1.1 (2026-05)
 
 ### Fase 2 — Revisão e atualização da documentação pública

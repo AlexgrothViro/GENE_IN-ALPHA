@@ -121,8 +121,10 @@ Ao criar um banco direcionado para novos alvos virais, siga estas diretrizes:
 Após a conclusão da execução, os resultados relevantes encontram-se estruturados nos seguintes arquivos:
 
 *   **`results/reports/{SAMPLE}_summary.md`**: Contém a tabela final resumida de hits identificados e classificados por similaridade, além de estatísticas básicas de montagem.
-*   **`results/blast/{SAMPLE}_labeled_hits.tsv`**: Tabela detalhada de hits em formato tabular contendo a classificação operacional de evidência (`STRONG`, `STRONG_DIVERGENT`, `MODERATE`, `WEAK_RECOVERABLE`, `REVIEW`).
+*   **`results/blast/{SAMPLE}_labeled_hits.tsv`**: tabela histórica de compatibilidade; suas classes são `legacy_label` e têm teto público E1. O artefato canônico é `sample_evidence.json`.
 *   **`results/blast/{SAMPLE}_adj_identity.tsv`**: Resultados contendo os cálculos da métrica de identidade ajustada (`adj_identity`).
+
+> **Resultados anteriores à Alpha.2:** execuções Evidence V2 antigas são preservadas para auditoria, mas aparecem como `LEGACY_INCOMPATIBLE`/`NOT_EVALUABLE`. Elas não são convertidas automaticamente. Reexecute a análise com `2.0.0-alpha.2` para gerar os TSVs, `sample_evidence.json`, manifesto e `SUCCESS.json` compatíveis.
 
 ### Cuidados e Critérios Críticos Antes de Reportar Resultados:
 *   **Diferença entre Triagem e Confirmação:** Lembre-se sempre de que os hits identificados representam similaridade sequencial e homologia provável, nunca um diagnóstico clínico conclusivo.
