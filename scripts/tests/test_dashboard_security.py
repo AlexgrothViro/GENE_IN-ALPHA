@@ -59,6 +59,56 @@ class DashboardSecurityTests(unittest.TestCase):
         self.assertEqual(environment["DB"], "ptv")
         self.assertEqual(environment["HOST_FILTER_ENABLED"], "false")
 
+    def test_unknown_host_selection_is_an_explicit_safe_opt_out(self):
+        host_environment = dashboard.host_env_from_params(
+            {"host_filter_mode": "none"}
+        )
+        self.assertNotEqual(host_environment.get("HOST_FILTER_MODE"), "none")
+
+        _, environment = dashboard.build_command(
+            "pipeline",
+            {
+                "sample": "zika-unknown-host",
+                "assembler": "spades",
+                "db": "custom",
+                "host_filter_mode": "none",
+            },
+        )
+        self.assertEqual(environment["HOST_FILTER_ENABLED"], "false")
+        self.assertNotIn("HOST_NAME", environment)
+        self.assertNotIn("HOST_INDEX_PREFIX", environment)
+
+    def test_sus_scrofa_filter_is_opt_in_and_resolves_its_index(self):
+        _, environment = dashboard.build_command(
+            "pipeline",
+            {
+                "sample": "safe",
+                "assembler": "spades",
+                "db": "custom",
+                "host_filter_mode": "sus_scrofa",
+            },
+        )
+        self.assertEqual(environment["HOST_FILTER_ENABLED"], "true")
+        self.assertEqual(environment["HOST_NAME"], "Sus scrofa")
+        self.assertTrue(
+            environment["HOST_INDEX_PREFIX"].endswith("ref/host/sus_scrofa_bt2")
+            or environment["HOST_INDEX_PREFIX"].endswith(r"ref\host\sus_scrofa_bt2")
+        )
+
+    def test_host_filter_rejects_unknown_modes_and_incomplete_custom_index(self):
+        with self.assertRaisesRegex(ValueError, "Modo de filtro"):
+            dashboard.host_env_from_params({"host_filter_mode": "strict"})
+        with self.assertRaisesRegex(ValueError, "exige nome e prefixo"):
+            dashboard.build_command(
+                "pipeline",
+                {
+                    "sample": "safe",
+                    "assembler": "spades",
+                    "db": "custom",
+                    "host_filter_mode": "custom",
+                },
+            )
+
     def test_auxiliary_dashboard_actions_have_executable_commands(self):
         check_command, _ = dashboard.build_command("check_env", {})
         demo_command, _ = dashboard.build_command("demo", {})

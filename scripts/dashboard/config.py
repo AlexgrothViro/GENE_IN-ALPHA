@@ -350,11 +350,14 @@ def host_env_from_params(params):
         env["HOST_REF"] = host_ref
         env["GENEIN_HOST_REF"] = host_ref
 
-    filter_mode = (params.get("host_filter_mode") or "").strip()
-    if filter_mode:
-        if filter_mode not in {"strict", "permissive", "off", "custom"}:
-            raise ValueError("Modo de filtro de hospedeiro invalido")
-        env["HOST_FILTER_MODE"] = filter_mode
+    # This field identifies the host-reference selection made by the
+    # dashboard.  It is not an alignment-policy knob.  In particular, "none"
+    # is the canonical opt-out when the biological host is unknown.
+    host_selection = str(params.get("host_filter_mode") or "none").strip().lower()
+    if host_selection not in {"none", "sus_scrofa", "custom"}:
+        raise ValueError(
+            "Modo de filtro de hospedeiro invalido; use none, sus_scrofa ou custom"
+        )
 
     host_action = (params.get("host_action") or "").strip()
     if host_action:

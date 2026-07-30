@@ -476,15 +476,27 @@ def build_command(action, params):
         alias_db = _DB_ALIAS.get(db, db)
         env["DB"] = alias_db
 
-        host_mode = params.get("host_filter_mode", "none")
-        if host_mode != "none":
-            env["HOST_FILTER_ENABLED"] = "true"
-            if "host_name" in params:
-                env["HOST_NAME"] = params["host_name"]
-            if "host_index_prefix" in params:
-                env["HOST_INDEX_PREFIX"] = params["host_index_prefix"]
-        else:
+        host_mode = str(params.get("host_filter_mode") or "none").strip().lower()
+        if host_mode == "none":
             env["HOST_FILTER_ENABLED"] = "false"
+        elif host_mode == "sus_scrofa":
+            env["HOST_FILTER_ENABLED"] = "true"
+            env["HOST_NAME"] = "Sus scrofa"
+            env["HOST_INDEX_PREFIX"] = str(REPO_ROOT / "ref" / "host" / "sus_scrofa_bt2")
+        elif host_mode == "custom":
+            host_name = str(params.get("host_name") or "").strip()
+            host_index_prefix = str(params.get("host_index_prefix") or "").strip()
+            if not host_name or not host_index_prefix:
+                raise ValueError(
+                    "Filtro customizado exige nome e prefixo do indice Bowtie2 do hospedeiro"
+                )
+            env["HOST_FILTER_ENABLED"] = "true"
+            env["HOST_NAME"] = host_name
+            env["HOST_INDEX_PREFIX"] = host_index_prefix
+        else:
+            raise ValueError(
+                "Modo de filtro de hospedeiro invalido; use none, sus_scrofa ou custom"
+            )
 
     if action == "check_env":
         cmd = ["bash", "scripts/00_check_env.sh"]
