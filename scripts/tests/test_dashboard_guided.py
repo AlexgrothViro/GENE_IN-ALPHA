@@ -62,6 +62,22 @@ class DashboardGuidedContractTests(unittest.TestCase):
         self.assertIn("guided.js", dashboard.JAVASCRIPT_MODULES)
         self.assertNotIn("../guided.js", dashboard.JAVASCRIPT_MODULES)
 
+    def test_primary_workflow_controls_have_accessible_labels(self):
+        for control_id in (
+            "db-target", "db-query", "db-taxid",
+            "upload-sample", "upload-r1-file", "upload-r2-file", "upload-zip-file",
+            "import-sample", "import-r1", "import-r2",
+            "assembly-only-sample-select", "assembly-only-assembler",
+            "pipeline-assembler", "pipeline-kmer", "host-filter-mode",
+            "advanced-sample-select", "advanced-min-pident", "advanced-min-aln-len",
+        ):
+            self.assertIn(f'for="{control_id}"', self.html, control_id)
+            self.assertIn(f'id="{control_id}"', self.html, control_id)
+        self.assertIn(
+            'role="group" aria-labelledby="pipeline-sample-label"',
+            self.html,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

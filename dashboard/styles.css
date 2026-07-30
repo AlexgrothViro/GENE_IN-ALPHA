@@ -1519,6 +1519,18 @@ textarea:focus-visible,
 .preflight-tool-list li[data-state="missing"] { color: #a33a32; }
 .preflight-tool-list li[data-state="optional"] { color: #6b7280; }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 main > *,
 .tab-panel,
 .ux-wizard-head {

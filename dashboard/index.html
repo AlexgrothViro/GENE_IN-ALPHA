@@ -151,19 +151,19 @@
             <div id="db-status" class="db-status">Banco viral: nenhum selecionado</div>
           </div>
           <form id="db-form" class="form-grid">
-            <div class="field">
+            <label class="field" for="db-target">
               <span class="field__label">Alvo pré-configurado (opcional)</span>
               <select id="db-target" name="target" class="field__input"></select>
-            </div>
-            <div class="field">
+            </label>
+            <label class="field" for="db-query">
               <span class="field__label">Outro vírus / banco customizado — query NCBI (opcional)</span>
-              <input name="query" class="field__input" placeholder='Ex.: "Orbivirus"[Organism] OR "Rotavirus A"[Organism] AND refseq[filter]' />
+              <input id="db-query" name="query" class="field__input" placeholder='Ex.: "Orbivirus"[Organism] OR "Rotavirus A"[Organism] AND refseq[filter]' />
               <span class="field-hint">Preencha aqui para qualquer vírus fora da lista acima. Aceita qualquer query NCBI válida.</span>
-            </div>
-            <div class="field">
+            </label>
+            <label class="field" for="db-taxid">
               <span class="field__label">TaxID (opcional)</span>
-              <input name="taxid" class="field__input" placeholder="Ex.: 12087" />
-            </div>
+              <input id="db-taxid" name="taxid" class="field__input" placeholder="Ex.: 12087" />
+            </label>
             <button class="btn btn--primary" type="submit">Preparar banco viral</button>
           </form>
 
@@ -180,22 +180,22 @@
             <div class="import-option">
               <h3 class="import-option__title">Opção A — Upload de arquivo (R1/R2 ou .zip)</h3>
               <form id="upload-form" class="form-grid" enctype="multipart/form-data">
-                <div class="field">
+                <label class="field" for="upload-sample">
                   <span class="field__label">Nome da amostra</span>
-                  <input name="sample" class="field__input" required />
-                </div>
-                <div class="field">
+                  <input id="upload-sample" name="sample" class="field__input" required />
+                </label>
+                <label class="field" for="upload-r1-file">
                   <span class="field__label">Arquivo R1 (opcional)</span>
-                  <input name="r1file" type="file" class="field__input" accept=".fastq,.fastq.gz" />
-                </div>
-                <div class="field">
+                  <input id="upload-r1-file" name="r1file" type="file" class="field__input" accept=".fastq,.fastq.gz" />
+                </label>
+                <label class="field" for="upload-r2-file">
                   <span class="field__label">Arquivo R2 (opcional)</span>
-                  <input name="r2file" type="file" class="field__input" accept=".fastq,.fastq.gz" />
-                </div>
-                <div class="field">
+                  <input id="upload-r2-file" name="r2file" type="file" class="field__input" accept=".fastq,.fastq.gz" />
+                </label>
+                <label class="field" for="upload-zip-file">
                   <span class="field__label">Arquivo .zip (opcional)</span>
-                  <input name="zipfile" type="file" class="field__input" accept=".zip" />
-                </div>
+                  <input id="upload-zip-file" name="zipfile" type="file" class="field__input" accept=".zip" />
+                </label>
                 <button class="btn btn--primary" type="submit">Importar upload</button>
               </form>
             </div>
@@ -204,20 +204,20 @@
               <summary class="import-option__summary">Opção B — Caminho local (avançado)</summary>
               <p class="import-option__hint">Aceita caminho Windows com normalização automática.</p>
               <form id="import-form" class="form-grid">
-                <div class="field">
+                <label class="field" for="import-sample">
                   <span class="field__label">Nome da amostra</span>
-                  <input name="sample" class="field__input" list="samples" required />
-                </div>
-                <div class="field">
+                  <input id="import-sample" name="sample" class="field__input" list="samples" required />
+                </label>
+                <label class="field" for="import-r1">
                   <span class="field__label">Caminho R1</span>
-                  <input name="r1" class="field__input" placeholder="Ex.: C:\\dados\\amostra_R1.fastq.gz" required />
-                </div>
-                <div class="field">
+                  <input id="import-r1" name="r1" class="field__input" placeholder="Ex.: C:\\dados\\amostra_R1.fastq.gz" required />
+                </label>
+                <label class="field" for="import-r2">
                   <span class="field__label">Caminho R2</span>
-                  <input name="r2" class="field__input" placeholder="Ex.: C:\\dados\\amostra_R2.fastq.gz" required />
-                </div>
+                  <input id="import-r2" name="r2" class="field__input" placeholder="Ex.: C:\\dados\\amostra_R2.fastq.gz" required />
+                </label>
                 <label class="checkbox-field">
-                  <input type="checkbox" name="copy" />
+                  <input id="import-copy" type="checkbox" name="copy" />
                   <span>Copiar arquivos (em vez de symlink)</span>
                 </label>
                 <button class="btn btn--primary" type="submit">Importar por caminho</button>
@@ -234,27 +234,27 @@
             <p class="section-card__description">Executa somente a montagem dos contigs a partir dos FASTQs importados. <strong>Não</strong> prepara banco viral, não roda BLAST e não gera relatório completo. Útil para obter contigs rapidamente, testar montadores ou usar em análises externas.</p>
           </div>
           <form id="assembly-only-form" class="form-grid">
-            <div class="field">
+            <label class="field" for="assembly-only-sample-select">
               <span class="field__label">Amostra</span>
               <select id="assembly-only-sample-select" name="sample" class="field__input" required></select>
-            </div>
-            <div class="field">
+            </label>
+            <label class="field" for="assembly-only-assembler">
               <span class="field__label">Assembler</span>
-              <select name="assembler" class="field__input" data-assembler-selector>
+              <select id="assembly-only-assembler" name="assembler" class="field__input" data-assembler-selector>
                 <option value="velvet">Velvet (padrão)</option>
                 <option value="spades">SPAdes</option>
                 <option value="metaspades">metaSPAdes</option>
               </select>
-            </div>
-            <div class="field">
+            </label>
+            <label class="field" for="assembly-only-kmer">
               <span class="field__label">k-mer</span>
-              <input name="kmer" type="number" class="field__input" min="15" max="99" value="31" />
-            </div>
-            <div class="field">
+              <input id="assembly-only-kmer" name="kmer" type="number" class="field__input" min="15" max="99" value="31" />
+            </label>
+            <label class="field" for="assembly-only-spades-params">
               <span class="field__label">Parâmetros SPAdes/metaSPAdes extras (opcional)</span>
-              <input name="spades_params" class="field__input" placeholder="Ex.: --cov-cutoff auto" />
+              <input id="assembly-only-spades-params" name="spades_params" class="field__input" placeholder="Ex.: --cov-cutoff auto" />
               <span class="field-hint">Deixe vazio para usar as configurações padrão do montador.</span>
-            </div>
+            </label>
             <button class="btn btn--assembly-only" type="submit" id="assembly-only-btn">🧩 Montar contigs apenas</button>
           </form>
           <div id="assembly-only-status" class="final-status" style="margin-top:0.75rem;"></div>
@@ -269,46 +269,48 @@
           </div>
           <form id="pipeline-form" class="form-grid">
             <label class="field"><span class="field__label">Analysis profile</span><select name="analysis_profile" class="field__input" data-profile-selector><option value="canonical-e1">Canonical E1</option><option value="assembly-consensus">Assembly consensus</option></select><span class="field-hint" data-profile-help>Assembly consensus runs Velvet, SPAdes and metaSPAdes when applicable.</span></label>
-            <div class="field">
-              <span class="field__label">Amostra</span>
+            <div class="field" role="group" aria-labelledby="pipeline-sample-label">
+              <span class="field__label" id="pipeline-sample-label">Amostra</span>
+              <label class="sr-only" for="sample-select">Amostra importada</label>
               <select id="sample-select" name="sample_select" class="field__input" style="margin-bottom: 0.5rem;"></select>
-              <input name="sample" class="field__input" placeholder="Ou informe manualmente" list="samples" />
+              <label class="sr-only" for="pipeline-sample-manual">Ou informe manualmente</label>
+              <input id="pipeline-sample-manual" name="sample" class="field__input" placeholder="Ou informe manualmente" list="samples" />
             </div>
-            <div class="field">
+            <label class="field" for="pipeline-assembler">
               <span class="field__label">Assembler</span>
-              <select name="assembler" class="field__input" data-assembler-selector>
+              <select id="pipeline-assembler" name="assembler" class="field__input" data-assembler-selector>
                 <option value="velvet">Velvet (padrão)</option>
                 <option value="spades">SPAdes</option>
                 <option value="metaspades">metaSPAdes</option>
               </select>
-            </div>
-            <div class="field">
+            </label>
+            <label class="field" for="pipeline-kmer">
               <span class="field__label">k-mer</span>
-              <input name="kmer" type="number" class="field__input" min="15" max="99" value="31" />
-            </div>
+              <input id="pipeline-kmer" name="kmer" type="number" class="field__input" min="15" max="99" value="31" />
+            </label>
             <div class="field field--checkbox">
               <label class="field__label" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
                 <input name="skip_qc" type="checkbox" />
                 <span>Pular controle de qualidade (fastp)</span>
               </label>
             </div>
-            <div class="field">
+            <label class="field" for="host-filter-mode">
               <span class="field__label">Filtro de hospedeiro</span>
               <select id="host-filter-mode" name="host_filter_mode" class="field__input">
                 <option value="none">Sem filtro de hospedeiro</option>
                 <option value="sus_scrofa">Sus scrofa (opt-in)</option>
                 <option value="custom">Indice Bowtie2 customizado</option>
               </select>
-            </div>
-            <div class="field" data-host-custom hidden>
+            </label>
+            <label class="field" for="pipeline-host-name" data-host-custom hidden>
               <span class="field__label">Nome do hospedeiro</span>
-              <input name="host_name" class="field__input" placeholder="Ex: Bos taurus" />
-            </div>
-            <div class="field" data-host-custom hidden>
+              <input id="pipeline-host-name" name="host_name" class="field__input" placeholder="Ex: Bos taurus" />
+            </label>
+            <label class="field" for="host-index-prefix" data-host-custom hidden>
               <span class="field__label">Prefixo do indice Bowtie2</span>
               <input id="host-index-prefix" name="host_index_prefix" class="field__input" placeholder="Ex: ref/host/bos_taurus_bt2" />
               <span id="host-index-status" class="field-hint"></span>
-            </div>
+            </label>
             <button id="pipeline-submit-button" class="btn btn--primary" type="submit">Executar análise principal</button>
           </form>
         </section>
@@ -377,33 +379,33 @@
           </div>
 
           <form id="advanced-form" class="form-grid">
-            <div class="field">
+            <label class="field" for="advanced-sample-select">
               <span class="field__label">Amostra</span>
               <select id="advanced-sample-select" name="sample" class="field__input" required></select>
-            </div>
-            <div class="field">
+            </label>
+            <label class="field" for="advanced-min-pident">
               <span class="field__label">Identidade Mínima (%)</span>
-              <input name="min_pident" type="number" step="0.1" min="50" max="100" value="85.0" class="field__input" required />
+              <input id="advanced-min-pident" name="min_pident" type="number" step="0.1" min="50" max="100" value="85.0" class="field__input" required />
               <span class="field-hint">Percentual mínimo de identidade do hit BLAST para incluir na análise. Valores menores = mais sensível, mais ruído.</span>
-            </div>
-            <div class="field">
+            </label>
+            <label class="field" for="advanced-min-aln-len">
               <span class="field__label">Comprimento Mínimo (pb)</span>
-              <input name="min_aln_len" type="number" min="15" max="1000" value="20" class="field__input" required />
+              <input id="advanced-min-aln-len" name="min_aln_len" type="number" min="15" max="1000" value="20" class="field__input" required />
               <span class="field-hint">Comprimento mínimo do alinhamento em pares de bases. Fragmentos abaixo disso são descartados.</span>
-            </div>
-            <div class="field">
+            </label>
+            <label class="field" for="advanced-method">
               <span class="field__label">Método Filogenético</span>
-              <select name="method" class="field__input">
+              <select id="advanced-method" name="method" class="field__input">
                 <option value="auto">IQ-TREE disponível (versão detectada)</option>
                 <option value="iqtree2">IQ-TREE (posicionamento exploratório)</option>
               </select>
               <span class="field-hint">A execução é bloqueada quando os gates não são atendidos ou o IQ-TREE está indisponível. Não há fallback silencioso.</span>
-            </div>
-            <div class="field">
+            </label>
+            <label class="field" for="advanced-kmer">
               <span class="field__label">K-mer</span>
-              <input name="kmer" type="number" min="15" max="99" value="31" class="field__input" required />
+              <input id="advanced-kmer" name="kmer" type="number" min="15" max="99" value="31" class="field__input" required />
               <span class="field-hint">Tamanho do k-mer usado na remontagem local dos contigs candidatos. Use o mesmo valor do pipeline principal.</span>
-            </div>
+            </label>
             <button class="btn btn--primary" type="submit">Executar Análise Complementar</button>
           </form>
         </section>
