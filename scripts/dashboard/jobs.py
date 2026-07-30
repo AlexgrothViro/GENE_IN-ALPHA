@@ -357,19 +357,60 @@ def find_blast_path(sample):
     return None
 
 
+def find_blast_raw_path(sample):
+    repo_root = get_repo_root()
+    candidates = sorted(
+        (repo_root / "results" / "blast").glob(f"{sample}_*_vs_db.tsv"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    return candidates[0] if candidates else None
+
+
+def find_adjusted_identity_path(sample):
+    candidate = get_repo_root() / "results" / "blast" / f"{sample}_adj_identity.tsv"
+    return candidate if candidate.exists() else None
+
+
 def find_hit_contigs_fasta_path(sample):
     repo_root = get_repo_root()
-    candidate = repo_root / "results" / "blast" / f"{sample}_hit_contigs.fasta"
-    if candidate.exists():
-        return candidate
+    for suffix in (".fasta", ".fa"):
+        candidate = repo_root / "results" / "blast" / f"{sample}_hit_contigs{suffix}"
+        if candidate.exists():
+            return candidate
     return None
+
+
+def find_assembly_contigs_path(sample):
+    candidate = get_repo_root() / "data" / "assemblies" / f"{sample}_assembly" / "contigs.fa"
+    return candidate if candidate.exists() else None
 
 
 def find_report_path(sample):
     repo_root = get_repo_root()
-    candidate = repo_root / "results" / "reports" / f"{sample}_report.md"
-    if candidate.exists():
-        return candidate
+    for name in (f"{sample}_summary.md", f"{sample}_report.md"):
+        candidate = repo_root / "results" / "reports" / name
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def find_log_path(metadata):
+    configured = metadata.get("log_file")
+    if configured:
+        candidate = Path(configured)
+        if candidate.exists():
+            return candidate
+    run_id = metadata.get("run_id") or metadata.get("id")
+    candidates = []
+    if run_id:
+        candidates.append(get_repo_root() / "logs" / f"ux_{run_id}.log")
+    sample = metadata.get("sample")
+    if sample:
+        candidates.append(get_repo_root() / "logs" / f"{sample}_pipeline.log")
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
     return None
 
 
@@ -404,11 +445,15 @@ def snapshot_run_artifacts(metadata):
     copied = []
     if sample:
         targets = [
+            (find_blast_raw_path(sample), "blast.tsv"),
             (find_blast_path(sample), "labeled_hits.tsv"),
+            (find_adjusted_identity_path(sample), "adj_identity.tsv"),
             (find_hit_contigs_fasta_path(sample), "hit_contigs.fasta"),
+            (find_assembly_contigs_path(sample), "assembly_contigs.fa"),
             (find_report_path(sample), "report.md"),
             (find_advanced_report_path(sample), "advanced_report.md"),
             (find_assembly_summary_path(sample), "assembly_summary.json"),
+            (find_log_path(metadata), "run.log"),
         ]
         for src, dest_name in targets:
             if src and src.exists():
@@ -428,6 +473,23 @@ def snapshot_run_artifacts(metadata):
     }
     atomic_json(manifest_file, manifest_data)
     return str(run_dir)
+
+
+def history_artifact_paths(run_dir):
+    filenames = {
+        "run_report": "report.md",
+        "run_log": "run.log",
+        "run_blast_tsv": "blast.tsv",
+        "run_labeled_hits_tsv": "labeled_hits.tsv",
+        "run_adj_identity_tsv": "adj_identity.tsv",
+        "run_hit_contigs_fasta": "hit_contigs.fasta",
+        "run_assembly_contigs_fasta": "assembly_contigs.fa",
+    }
+    return {
+        key: filename
+        for key, filename in filenames.items()
+        if (run_dir / filename).is_file()
+    }
 
 
 def parse_pipeline_details(params):
@@ -821,8 +883,10 @@ def run_job(job_id, action, params):
                         "sample": sample,
                         "action": action,
                         "params": params,
+                        "started_at": jobs[job_id].get("started_at"),
                         "finished_at": jobs[job_id]["finished_at"],
                         "command": command_text,
+                        "log_file": str(log_file),
                         "status": "done",
                     })
             else:
@@ -937,11 +1001,12 @@ def list_run_history():
                     if data.get("action", "").startswith("evidence"):
                         continue
                     runs.append({
-                        "id": item.name, "run_id": item.name,
+                        "id": item.name, "run_id": item.name, "run_dir": item.name,
                         "action": data.get("action"), "sample": data.get("sample"),
                         "start": data.get("start"), "end": data.get("end"),
                         "end_epoch": data.get("end_epoch", 0),
                         "status": "done",
+                        "paths": history_artifact_paths(item),
                     })
                 except Exception:
                     pass
@@ -950,12 +1015,16 @@ def list_run_history():
                     meta = json.loads(meta_file.read_text(encoding="utf-8"))
                     if meta.get("action", "").startswith("evidence"):
                         continue
+                    if meta.get("status") in {"done", "done_with_warning"}:
+                        snapshot_run_artifacts(meta)
                     runs.append({
-                        "id": item.name, "run_id": item.name,
+                        "id": item.name, "run_id": item.name, "run_dir": item.name,
                         "action": meta.get("action"), "sample": meta.get("sample"),
-                        "start": meta.get("created_at"), "end": meta.get("finished_at"),
-                        "end_epoch": 0,
+                        "start": meta.get("started_at") or meta.get("created_at"),
+                        "end": meta.get("finished_at"),
+                        "end_epoch": _history_epoch(meta.get("finished_at")),
                         "status": meta.get("status", "done"),
+                        "paths": history_artifact_paths(item),
                     })
                 except Exception:
                     pass
@@ -968,13 +1037,25 @@ def resolve_history_file(run_dir, file_type):
     targets = {
         "report": "report.md",
         "advanced_report": "advanced_report.md",
+        "log": "run.log",
+        "blast": "blast.tsv",
+        "labeled": "labeled_hits.tsv",
         "blast_tsv": "labeled_hits.tsv",
+        "adj_identity": "adj_identity.tsv",
+        "hit_contigs_fasta": "hit_contigs.fasta",
         "hit_contigs": "hit_contigs.fasta",
+        "assembly_contigs_fasta": "assembly_contigs.fa",
         "assembly_summary": "assembly_summary.json",
         "sample_evidence": "sample_evidence.json",
     }
     filename = targets.get(file_type)
     if not filename:
         return None
-    candidate = run_dir / filename
+    runs_dir = get_runs_dir().resolve()
+    try:
+        run_path = (runs_dir / str(run_dir)).resolve()
+        run_path.relative_to(runs_dir)
+    except (OSError, ValueError):
+        return None
+    candidate = run_path / filename
     return candidate if candidate.is_file() else None

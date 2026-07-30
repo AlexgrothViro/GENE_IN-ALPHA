@@ -521,6 +521,7 @@ const renderHistory = (runs) => {
         <button data-open="blast">🔍 BLAST Bruto</button>
         <button data-open="labeled" class="primary">🔬 Revisar hits classificados</button>
         <button data-open="adj_identity">📊 Identidade Adj.</button>
+        ${run.paths && run.paths.run_assembly_contigs_fasta ? `<button data-open="assembly_contigs_fasta">⬇ Contigs montados</button>` : ''}
         ${run.paths && run.paths.run_hit_contigs_fasta ? `<button data-open="hit_contigs_fasta">⬇ FASTA Hits</button>` : ''}
         <button data-rerun="1">🔄 Reexecutar</button>
       </div>`;

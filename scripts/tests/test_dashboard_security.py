@@ -340,6 +340,50 @@ class DashboardSecurityTests(unittest.TestCase):
             self.assertEqual(history[0]["run_id"], "run-v2")
             self.assertEqual(history[1]["sample"], "legacy")
 
+    def test_legacy_history_snapshots_pipeline_artifacts_and_exposes_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runs_dir = root / "results/runs"
+            run_dir = runs_dir / "run-zikaer"
+            run_dir.mkdir(parents=True)
+            (run_dir / "metadata.json").write_text(json.dumps({
+                "action": "pipeline", "sample": "zikaer", "run_id": "run-zikaer",
+                "status": "done", "finished_at": "2026-07-30T16:37:34-03:00",
+            }), encoding="utf-8")
+            (root / "results/blast").mkdir(parents=True)
+            (root / "results/blast/zikaer_k31_vs_db.tsv").write_text("raw\n", encoding="utf-8")
+            (root / "results/blast/zikaer_labeled_hits.tsv").write_text("labeled\n", encoding="utf-8")
+            (root / "results/blast/zikaer_adj_identity.tsv").write_text("adjusted\n", encoding="utf-8")
+            (root / "results/blast/zikaer_hit_contigs.fasta").write_text(">hit\nACGT\n", encoding="utf-8")
+            (root / "results/reports").mkdir(parents=True)
+            (root / "results/reports/zikaer_summary.md").write_text("report\n", encoding="utf-8")
+            (root / "data/assemblies/zikaer_assembly").mkdir(parents=True)
+            (root / "data/assemblies/zikaer_assembly/contigs.fa").write_text(">contig\nACGT\n", encoding="utf-8")
+            (root / "logs").mkdir(parents=True)
+            (root / "logs/ux_run-zikaer.log").write_text("log\n", encoding="utf-8")
+            history_globals = dashboard.list_run_history.__globals__
+            resolve_globals = dashboard.resolve_history_file.__globals__
+            snapshot_globals = dashboard.snapshot_run_artifacts.__globals__
+            with patch.dict(
+                history_globals,
+                {
+                    "get_repo_root": lambda: root,
+                    "get_runs_dir": lambda: runs_dir,
+                    "EVIDENCE_SERVICE": type("Service", (), {"evidence_root": root / "results/evidence"})(),
+                },
+            ), patch.dict(
+                snapshot_globals,
+                {"get_repo_root": lambda: root, "get_runs_dir": lambda: runs_dir},
+            ), patch.dict(resolve_globals, {"get_runs_dir": lambda: runs_dir}):
+                history = dashboard.list_run_history()
+                self.assertEqual(history[0]["run_dir"], "run-zikaer")
+                self.assertIn("run_assembly_contigs_fasta", history[0]["paths"])
+                self.assertIn("run_hit_contigs_fasta", history[0]["paths"])
+                self.assertEqual(
+                    dashboard.resolve_history_file("run-zikaer", "assembly_contigs_fasta"),
+                    run_dir / "assembly_contigs.fa",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
