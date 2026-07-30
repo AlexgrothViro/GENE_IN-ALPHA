@@ -17,7 +17,7 @@ Ele não é autoridade científica. Deve consumir a decisão canônica da Eviden
 ## Estados que precisam permanecer distintos
 
 - execução: em fila, executando, concluída, bloqueada, falhou, cancelada;
-- outcome: `RECOVERED`, `NO_EVIDENCE`, `NOT_EVALUABLE`;
+- outcome: `EVIDENCE_RECOVERED`, `NO_EVIDENCE_RECOVERED`, `NOT_EVALUABLE`;
 - evidência: `E1` ou `NOT_EVALUABLE` em Alpha.2;
 - conclusão reportada: `SHADOW_ONLY`;
 - gates, caveats, controles e limitações.

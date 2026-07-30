@@ -53,7 +53,6 @@ tmp_ux_orig.py
 config.env
 config/picornavirus.env
 config/secrets.env
-config/evidence_v2.yaml
 
 # Referencias e indices locais de hospedeiro (podem ter varios GB)
 ref/host/

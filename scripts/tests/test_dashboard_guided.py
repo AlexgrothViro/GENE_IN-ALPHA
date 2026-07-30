@@ -52,6 +52,12 @@ class DashboardGuidedContractTests(unittest.TestCase):
         self.assertFalse(result["assembler_available"])
         self.assertIn("nenhum montador", result["summary"])
 
+    def test_environment_status_exposes_environment_file_contract(self):
+        result = dashboard.get_environment_status()
+        self.assertTrue(result["has_environment_yml"])
+        self.assertTrue(result["environment_yml_path"].endswith("environment.yml"))
+        self.assertTrue(result["environment_yml_mtime"])
+
     def test_module_allowlist_is_explicit(self):
         self.assertIn("guided.js", dashboard.JAVASCRIPT_MODULES)
         self.assertNotIn("../guided.js", dashboard.JAVASCRIPT_MODULES)

@@ -59,6 +59,18 @@ class DashboardSecurityTests(unittest.TestCase):
         self.assertEqual(environment["DB"], "ptv")
         self.assertEqual(environment["HOST_FILTER_ENABLED"], "false")
 
+    def test_auxiliary_dashboard_actions_have_executable_commands(self):
+        check_command, _ = dashboard.build_command("check_env", {})
+        demo_command, _ = dashboard.build_command("demo", {})
+        db_command, _ = dashboard.build_command("build_db", {"db": "ptv"})
+        assembly_command, _ = dashboard.build_command(
+            "assembly_only", {"sample": "safe", "assembler": "spades"}
+        )
+        self.assertEqual(check_command, ["bash", "scripts/00_check_env.sh"])
+        self.assertEqual(demo_command, ["make", "demo"])
+        self.assertIn("make", db_command)
+        self.assertIn("scripts/22_run_assembly_only.sh", assembly_command)
+
     def test_evidence_requires_database_and_defaults_to_no_host_filter(self):
         with self.assertRaisesRegex(ValueError, "explicitamente"):
             dashboard.build_command(

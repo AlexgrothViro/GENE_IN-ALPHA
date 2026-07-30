@@ -379,9 +379,21 @@ def get_environment_status():
     except Exception:
         pass
 
+    environment_yml_exists = ENVIRONMENT_YML.is_file()
+    environment_yml_mtime = None
+    if environment_yml_exists:
+        try:
+            environment_yml_mtime = iso_now(ENVIRONMENT_YML.stat().st_mtime)
+        except OSError:
+            environment_yml_mtime = None
+
     return {
         "ok": preflight["ok"],
         "preflight": preflight,
+        "has_environment_yml": environment_yml_exists,
+        "environment_yml_path": str(ENVIRONMENT_YML) if environment_yml_exists else None,
+        "environment_yml_mtime": environment_yml_mtime,
+        "running_on_windows_mount": bool(in_wsl and str(REPO_ROOT).startswith("/mnt/")),
         "system": {
             "python_version": python_version,
             "in_wsl": in_wsl,

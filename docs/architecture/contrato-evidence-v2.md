@@ -8,8 +8,8 @@ Descreve se a execução terminou tecnicamente: por exemplo, concluída, falhou,
 
 ### `analysis_outcome`
 
-- `RECOVERED`: foram recuperadas evidências computacionais classificáveis.
-- `NO_EVIDENCE`: a análise foi válida, mas não recuperou evidências classificáveis.
+- `EVIDENCE_RECOVERED`: foram recuperadas evidências computacionais classificáveis.
+- `NO_EVIDENCE_RECOVERED`: a análise foi válida, mas não recuperou evidências classificáveis.
 - `NOT_EVALUABLE`: a execução ou um gate crítico não permitiu uma conclusão científica válida.
 
 `analysis_outcome` registra recuperação computacional, não aprovação de promoção. Um
@@ -59,7 +59,7 @@ A revisão deve procurar:
 - Controle negativo compatível pode bloquear promoção.
 - Falha do controle positivo pode invalidar o lote.
 - Ambiguidade competitiva deve ser preservada, não convertida em especificidade.
-- Falha crítica V2 resulta em `NOT_EVALUABLE`, nunca em `NO_EVIDENCE`.
+- Falha crítica V2 resulta em `NOT_EVALUABLE`, nunca em `NO_EVIDENCE_RECOVERED`.
 - Dashboard, relatório e camadas interpretativas não podem recalcular nem elevar o nível canônico.
 
 ## Campos cuja presença deve ser auditada

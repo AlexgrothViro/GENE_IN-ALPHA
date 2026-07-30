@@ -366,7 +366,16 @@ def build_command(action, params):
         else:
             env["HOST_FILTER_ENABLED"] = "false"
 
-    if action == "sample_add":
+    if action == "check_env":
+        cmd = ["bash", "scripts/00_check_env.sh"]
+
+    elif action == "demo":
+        cmd = ["make", "demo"]
+
+    elif action == "rebuild_env":
+        cmd = ["bash", "bundle/install_wsl.sh"]
+
+    elif action == "sample_add":
         sample = validate_sample_id(params["sample"])
         r1 = validate_fastq(params["r1"])
         r2 = validate_fastq(params.get("r2", "")) if params.get("r2") else ""
@@ -420,7 +429,7 @@ def build_command(action, params):
             cmd.append(f"--reservation-token={token}")
             env["EVIDENCE_RESERVATION_TOKEN"] = token
 
-    elif action == "db_build":
+    elif action in {"build_db", "db_build"}:
         db_name = (params.get("db") or "").strip().lower()
         alias_db = _DB_ALIAS.get(db_name, db_name)
 
@@ -437,6 +446,34 @@ def build_command(action, params):
             raise ValueError(f"Banco nao reconhecido em targets.json: '{db_name}'.")
 
         cmd = ["make", "db", f"DB={alias_db}"]
+
+    elif action == "advanced_analysis":
+        sample = validate_sample_id(params["sample"])
+        cmd = ["bash", "scripts/21_run_advanced_analysis.sh", "--sample", sample]
+        for key, option in (
+            ("kmer", "--kmer"),
+            ("min_pident", "--min-pident"),
+            ("min_aln_len", "--min-aln-len"),
+            ("method", "--method"),
+            ("threads", "--threads"),
+        ):
+            value = params.get(key)
+            if value not in (None, ""):
+                cmd.extend([option, str(value)])
+
+    elif action == "assembly_only":
+        sample = validate_sample_id(params["sample"])
+        assembler = (params.get("assembler") or "velvet").strip().lower()
+        if assembler not in {"velvet", "spades", "metaspades"}:
+            raise ValueError("assembler invalido")
+        cmd = [
+            "bash", "scripts/22_run_assembly_only.sh",
+            "--sample", sample, "--assembler", assembler,
+        ]
+        if params.get("kmer") not in (None, ""):
+            cmd.extend(["--kmer", str(params["kmer"])])
+        if params.get("spades_params") not in (None, ""):
+            cmd.extend(["--spades-params", str(params["spades_params"])])
 
     else:
         raise ValueError(f"Acao desconhecida: {action}")
@@ -670,7 +707,7 @@ def list_run_history():
                 "batch_id": state.get("batch_id"), "start": state.get("started_at") or state.get("created_at"),
                 "end": finished_at, "end_epoch": _history_epoch(finished_at),
                 "exit_code": 0 if inspection["valid_alpha2"] and status in {"done", "done_with_warning"} else 1,
-                "status": display_status, "shadow_mode": True, "evidence_v2": True,
+                "status": display_status, "shadow_mode": state.get("shadow_mode"), "evidence_v2": True,
                 "valid_alpha2": inspection["valid_alpha2"],
                 "compatibility_status": inspection["status"],
                 "compatibility_message": inspection["message"],

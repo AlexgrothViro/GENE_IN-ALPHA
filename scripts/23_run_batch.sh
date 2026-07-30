@@ -110,7 +110,7 @@ stage controls "done" "Estados de controle aplicados somente à cópia transacio
 stage evidence_classification running
 python3 "$SCRIPT_DIR/evidence/write_provenance.py" --config "$CONFIG" --out "$STAGING/provenance.json" \
   --artifact "e1_activation_policy=$REPO_ROOT/config/evidence_activation.json" \
-  --value "run_id=$RUN_ID" --value "batch_id=$BATCH_ID" --value "shadow_mode=false" \
+  --value "run_id=$RUN_ID" --value "batch_id=$BATCH_ID" --value "shadow_mode=$(python3 "$SCRIPT_DIR/evidence/activation_policy.py" --field shadow_mode)" \
   --value "policy_version=$(python3 "$SCRIPT_DIR/evidence/activation_policy.py" --field policy_version)" \
   --value "activation_record_id=$(python3 "$SCRIPT_DIR/evidence/activation_policy.py" --field activation_record_id)" \
   --value "child_run_count=${#SAMPLES[@]}"
