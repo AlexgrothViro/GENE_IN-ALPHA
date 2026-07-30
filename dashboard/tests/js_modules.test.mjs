@@ -4,6 +4,7 @@ import test from "node:test";
 import { setDisabled } from "../js/a11y.js";
 import { filterHistoryRuns } from "../js/history.js";
 import { canonicalExecutionStatus } from "../js/jobs.js";
+import { escapeHTML } from "../js/results.js";
 import { EXEC_STEPS, sectionStep, stepBlocked } from "../js/wizard.js";
 
 test("wizard preserves the five-stage reference flow", () => {
@@ -35,4 +36,11 @@ test("disabled controls expose the blocking reason", () => {
   assert.equal(node.disabled, true);
   assert.equal(node.title, "Prepare o banco");
   assert.equal(attributes.get("aria-disabled"), "true");
+});
+
+test("HTML escaping keeps hostile log values literal", () => {
+  const hostile = '<img src=x onerror="alert(1)">';
+  const escaped = escapeHTML(hostile);
+  assert.equal(escaped, "&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
+  assert.equal(escaped.includes("<img"), false);
 });

@@ -165,14 +165,22 @@ const showFriendlyError = (tail, logLink) => {
       bgClr = "#ebf5fb";
     }
 
-    let actionHtml = action ? `<br><strong style="color: #444; display: inline-block; margin-top: 0.3rem;">Sugestão:</strong> <span style="font-style: italic;">${action}</span>` : "";
+    // Stage, sample, description and suggested action originate in the job log.
+    // Keep the rich status card, but never treat log content as markup.
+    const safeStage = escapeHTML(stage);
+    const safeSample = escapeHTML(sample);
+    const safeDescription = escapeHTML(description);
+    const safeAction = escapeHTML(action);
+    let actionHtml = action
+      ? `<br><strong style="color: #444; display: inline-block; margin-top: 0.3rem;">Sugestão:</strong> <span style="font-style: italic;">${safeAction}</span>`
+      : "";
 
     const bannerHtml = `
       <div class="error-banner ${alertClass}" style="margin: 0.5rem 0; padding: 1rem; border-left: 5px solid ${borderClr}; background: ${bgClr}; border-radius: 4px; text-align: left;">
         <div style="font-weight: bold; margin-bottom: 0.3rem; font-size: 1.05rem;">
-          ${icon} Falha na etapa: <code style="background: rgba(0,0,0,0.05); padding: 2px 4px; border-radius: 3px;">${stage}</code> (Amostra: ${sample})
+          ${icon} Falha na etapa: <code style="background: rgba(0,0,0,0.05); padding: 2px 4px; border-radius: 3px;">${safeStage}</code> (Amostra: ${safeSample})
         </div>
-        <div style="margin-bottom: 0.5rem; line-height: 1.4;">${description}${actionHtml}</div>
+        <div style="margin-bottom: 0.5rem; line-height: 1.4;">${safeDescription}${actionHtml}</div>
         <details style="margin-top: 0.8rem; border-top: 1px solid rgba(0,0,0,0.1); padding-top: 0.5rem;">
           <summary style="cursor: pointer; font-size: 0.85rem; font-weight: bold; color: #666; outline: none;">Visualizar Detalhes Técnicos de Depuração (Tail do Log)</summary>
           <pre style="margin-top: 0.5rem; font-size: 0.82rem; background: #fafafa; padding: 0.5rem; border: 1px solid #eee; overflow-x: auto; max-height: 250px; text-align: left;">${escapeHTML(tail)}</pre>
