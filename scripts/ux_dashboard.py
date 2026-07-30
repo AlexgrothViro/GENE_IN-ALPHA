@@ -27,8 +27,10 @@ from dashboard.config import (
 )
 from dashboard.jobs import (
     EVIDENCE_SERVICE, jobs, jobs_lock, MAX_OUTPUT_LINES, JOB_TTL_SECONDS,
-    MAX_JOBS_IN_MEMORY, MAX_RUNNING_JOBS, initialize_evidence_dashboard_state,
+    MAX_JOBS_IN_MEMORY, MAX_RUNNING_JOBS, ACTIVE_JOB_STATES,
+    TERMINAL_JOB_STATES, initialize_evidence_dashboard_state,
     force_evidence_state_terminal, terminate_process_group, mark_cancellation_failure,
+    claim_job_for_execution, launch_claimed_job, request_job_cancellation,
     classify_evidence_failure, evidence_status_summary, cleanup_old_jobs,
     read_tail, clamp_output, find_blast_path, find_hit_contigs_fasta_path,
     find_report_path, find_advanced_report_path, find_assembly_summary_path,

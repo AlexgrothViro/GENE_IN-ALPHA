@@ -38,10 +38,12 @@ from dashboard.config import (
     save_config_env, validate_host_index, get_environment_status, require_sample_id,
 )
 from dashboard.jobs import (
-    jobs, jobs_lock, MAX_OUTPUT_LINES, MAX_RUNNING_JOBS, EVIDENCE_SERVICE,
+    jobs, jobs_lock, MAX_OUTPUT_LINES, MAX_RUNNING_JOBS, ACTIVE_JOB_STATES,
+    EVIDENCE_SERVICE,
     build_command, run_job, cleanup_old_jobs, list_run_history,
     resolve_history_file, terminate_process_group, mark_cancellation_failure,
     force_evidence_state_terminal, initialize_evidence_dashboard_state,
+    request_job_cancellation,
 )
 
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -553,16 +555,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/api/job/") and parsed.path.endswith("/cancel"):
             parts = parsed.path.split("/")
             job_id = parts[3] if len(parts) >= 5 else ""
-            with jobs_lock:
-                job = jobs.get(job_id)
-            if not job:
+            cancellation = request_job_cancellation(job_id)
+            if not cancellation["found"]:
                 return json_response(self, HTTPStatus.NOT_FOUND, {"error": "Job não encontrado"})
-            status = job.get("status")
-            if status not in ("running", "queued"):
-                return json_response(self, HTTPStatus.OK, {"ok": False, "message": f"Job não está em execução (status={status})"})
-            process = job.get("process")
-            with jobs_lock:
-                jobs[job_id]["status"] = "cancelling"
+            if not cancellation["ok"]:
+                return json_response(self, HTTPStatus.OK, {
+                    "ok": False,
+                    "message": f"Job não está em execução (status={cancellation['status']})",
+                })
+            process = cancellation["process"]
+            if process is None and cancellation["status"] == "cancelled":
+                if cancellation["action"] in {"evidence_pipeline", "evidence_batch"}:
+                    force_evidence_state_terminal(
+                        job_id, "cancelled",
+                        "Execução cancelada antes do lançamento do processo.",
+                    )
             if process is not None:
                 import signal as _signal
                 signal_value = _signal.SIGTERM if os.name != "nt" else getattr(_signal, "CTRL_BREAK_EVENT", _signal.SIGTERM)
@@ -571,7 +578,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     logger.info("[job:%s] SIGTERM enviado para cancelamento.", job_id)
                 else:
                     logger.error("[job:%s] Falha ao cancelar grupo de processos: %s", job_id, error)
-                    mark_cancellation_failure(job_id, job.get("action"), "Falha ao encerrar o grupo de processos; revisão manual é necessária.")
+                    mark_cancellation_failure(job_id, cancellation["action"], "Falha ao encerrar o grupo de processos; revisão manual é necessária.")
                     return json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": "Falha ao encerrar grupo de processos", "failure_type": "CANCELLATION_FAILED"})
                 
                 def _force_kill(p, jid):
@@ -589,14 +596,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     mark_cancellation_failure(jid, jobs.get(jid, {}).get("action"), "Falha ao encerrar o grupo de processos; revisão manual é necessária.")
                 import threading
                 threading.Thread(target=_force_kill, args=(process, job_id), daemon=True).start()
-            else:
-                with jobs_lock:
-                    jobs[job_id]["status"] = "cancelled"
-                if job.get("action") in {"evidence_pipeline", "evidence_batch"}:
-                    force_evidence_state_terminal(
-                        job_id, "cancelled",
-                        "Execução cancelada antes do processo iniciar; nenhum artefato foi promovido.",
-                    )
             logger.info("[job:%s] Cancelamento solicitado pelo usuário.", job_id)
             return json_response(self, HTTPStatus.OK, {"ok": True, "message": "Cancelamento solicitado"})
 
@@ -719,23 +718,23 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 raise ValueError("configuração Evidence V2 não encontrada")
             EVIDENCE_SERVICE.validate_config_text(config_path.read_text(encoding="utf-8"))
         with jobs_lock:
-            running = sum(1 for item in jobs.values() if item.get("status") in {"queued", "running"})
+            running = sum(1 for item in jobs.values() if item.get("status") in ACTIVE_JOB_STATES)
             if running >= MAX_RUNNING_JOBS:
                 return json_response(self, HTTPStatus.TOO_MANY_REQUESTS, {"error": "Limite de jobs simultaneos atingido"})
             if sample and any(
-                item.get("sample") == sample and item.get("status") in {"queued", "running"}
+                item.get("sample") == sample and item.get("status") in ACTIVE_JOB_STATES
                 for item in jobs.values()
             ):
                 return json_response(self, HTTPStatus.CONFLICT, {"error": f"A amostra '{sample}' ja possui um job em execucao"})
             if action in {"build_db", "rebuild_env"} and any(
-                item.get("action") in {"build_db", "rebuild_env"} and item.get("status") in {"queued", "running"}
+                item.get("action") in {"build_db", "rebuild_env"} and item.get("status") in ACTIVE_JOB_STATES
                 for item in jobs.values()
             ):
                 return json_response(self, HTTPStatus.CONFLICT, {"error": "Ja existe uma operacao de ambiente/banco em execucao"})
             if action == "evidence_batch" and any(
                 item.get("action") == "evidence_batch"
                 and item.get("manifest_id") == params.get("manifest_id")
-                and item.get("status") in {"queued", "running"}
+                and item.get("status") in ACTIVE_JOB_STATES
                 for item in jobs.values()
             ):
                 return json_response(self, HTTPStatus.CONFLICT, {"error": "Este manifesto ja possui uma execucao Evidence V2 em andamento"})

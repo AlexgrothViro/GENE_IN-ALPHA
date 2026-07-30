@@ -49,6 +49,8 @@ MAX_OUTPUT_LINES = 4000
 JOB_TTL_SECONDS = 24 * 60 * 60
 MAX_JOBS_IN_MEMORY = 100
 MAX_RUNNING_JOBS = 4
+ACTIVE_JOB_STATES = frozenset({"queued", "starting", "running", "cancelling"})
+TERMINAL_JOB_STATES = frozenset({"done", "done_with_warning", "blocked", "failed", "cancelled"})
 
 
 def initialize_evidence_dashboard_state(action, params):
@@ -131,6 +133,124 @@ def terminate_process_group(process, signal_value) -> tuple[bool, str | None]:
     return True, None
 
 
+def claim_job_for_execution(job_id, command_text, log_path_text) -> bool:
+    """Atomically reserve a queued job before creating its subprocess."""
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if job is None:
+            return False
+        if job.get("status") in {"cancelling", "cancelled"}:
+            job.update({
+                "status": "cancelled",
+                "finished_at": iso_now(),
+                "failure_type": "CANCELLED",
+                "process": None,
+            })
+            return False
+        if job.get("status") != "queued":
+            return False
+        job.update({
+            "status": "starting",
+            "started_at": iso_now(),
+            "command": command_text,
+            "log_file": log_path_text,
+        })
+        return True
+
+
+def launch_claimed_job(job_id, command, env):
+    """Create and register a process without exposing a cancellable gap."""
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if job is None:
+            return None
+        if job.get("status") in {"cancelling", "cancelled"}:
+            job.update({
+                "status": "cancelled",
+                "finished_at": iso_now(),
+                "failure_type": "CANCELLED",
+                "process": None,
+            })
+            return None
+        if job.get("status") != "starting":
+            return None
+        try:
+            process = Popen(
+                command,
+                cwd=get_repo_root(),
+                stdout=PIPE,
+                stderr=STDOUT,
+                text=True,
+                bufsize=1,
+                env=env,
+                start_new_session=(os.name != "nt"),
+                creationflags=(
+                    getattr(__import__("subprocess"), "CREATE_NEW_PROCESS_GROUP", 0)
+                    if os.name == "nt" else 0
+                ),
+            )
+        except Exception:
+            job.update({
+                "status": "failed",
+                "process": None,
+                "finished_at": iso_now(),
+                "failure_type": "TOOL_FAILURE",
+            })
+            raise
+        job.update({"status": "running", "process": process})
+        return process
+
+
+def request_job_cancellation(job_id) -> dict:
+    """Atomically record cancellation and return the process to signal."""
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if job is None:
+            return {
+                "found": False, "ok": False, "status": None,
+                "process": None, "action": None,
+            }
+        status = job.get("status")
+        action = job.get("action")
+        if status in {"queued", "starting"}:
+            job.update({
+                "status": "cancelled",
+                "cancel_requested": True,
+                "finished_at": iso_now(),
+                "failure_type": "CANCELLED",
+                "process": None,
+            })
+            return {
+                "found": True, "ok": True, "status": "cancelled",
+                "process": None, "action": action,
+            }
+        if status == "running":
+            process = job.get("process")
+            if process is None:
+                job.update({
+                    "status": "failed",
+                    "finished_at": iso_now(),
+                    "failure_type": "CANCELLATION_FAILED",
+                })
+                return {
+                    "found": True, "ok": False, "status": "failed",
+                    "process": None, "action": action,
+                }
+            job.update({
+                "status": "cancelling",
+                "cancel_requested": True,
+                "cancel_signal_sent": True,
+            })
+            return {
+                "found": True, "ok": True, "status": "cancelling",
+                "process": process, "action": action,
+            }
+        return {
+            "found": True, "ok": False, "status": status,
+            "process": job.get("process"), "action": action,
+        }
+
+
 def mark_cancellation_failure(job_id, action, message) -> None:
     """Make an unverified cancellation a terminal failure, never a success."""
     with jobs_lock:
@@ -183,7 +303,7 @@ def cleanup_old_jobs():
         now = time.time()
         to_remove = []
         for job_id, info in jobs.items():
-            if info["status"] in {"done", "failed", "cancelled"}:
+            if info["status"] in TERMINAL_JOB_STATES:
                 finished_at = info.get("finished_at")
                 if finished_at:
                     try:
@@ -198,7 +318,7 @@ def cleanup_old_jobs():
         if len(jobs) > MAX_JOBS_IN_MEMORY:
             finished = [
                 (jid, j) for jid, j in jobs.items()
-                if j["status"] in {"done", "failed", "cancelled"}
+                if j["status"] in TERMINAL_JOB_STATES
             ]
             finished.sort(key=lambda x: x[1].get("finished_at", ""))
             excess = len(jobs) - MAX_JOBS_IN_MEMORY
@@ -497,18 +617,6 @@ def build_command(action, params):
 def run_job(job_id, action, params):
     output_buf = []
 
-    with jobs_lock:
-        job_info = jobs[job_id]
-        if job_info.get("status") in {"cancelling", "cancelled"}:
-            job_info.update({
-                "status": "cancelled",
-                "finished_at": iso_now(),
-                "failure_type": "CANCELLED",
-            })
-            return
-        job_info["status"] = "running"
-        job_info["started_at"] = iso_now()
-
     env = dict(os.environ)
 
     try:
@@ -548,21 +656,26 @@ def run_job(job_id, action, params):
         return
 
     log_file = LOG_DIR / f"ux_{job_id}.log"
-    with jobs_lock:
-        jobs[job_id]["command"] = " ".join(cmd)
-        jobs[job_id]["log_file"] = str(log_file)
+    command_text = " ".join(cmd)
+    if not claim_job_for_execution(job_id, command_text, str(log_file)):
+        if action in {"evidence_pipeline", "evidence_batch"}:
+            force_evidence_state_terminal(
+                job_id, "cancelled",
+                "Execução cancelada antes do lançamento do processo.",
+                "CANCELLED", command_text,
+            )
+        return
 
     try:
-        popener = Popen(
-            cmd,
-            cwd=get_repo_root(),
-            stdout=PIPE,
-            stderr=STDOUT,
-            text=True,
-            bufsize=1,
-            env=env,
-            start_new_session=(os.name != "nt"),
-        )
+        popener = launch_claimed_job(job_id, cmd, env)
+        if popener is None:
+            if action in {"evidence_pipeline", "evidence_batch"}:
+                force_evidence_state_terminal(
+                    job_id, "cancelled",
+                    "Execução cancelada durante a transição de lançamento.",
+                    "CANCELLED", command_text,
+                )
+            return
     except Exception as exc:
         msg = f"[ERRO] Falha ao iniciar processo: {exc}"
         with jobs_lock:
@@ -574,11 +687,8 @@ def run_job(job_id, action, params):
                 "failure_message": str(exc),
             })
         if action in {"evidence_pipeline", "evidence_batch"}:
-            force_evidence_state_terminal(job_id, "failed", str(exc), "TOOL_FAILURE", " ".join(cmd))
+            force_evidence_state_terminal(job_id, "failed", str(exc), "TOOL_FAILURE", command_text)
         return
-
-    with jobs_lock:
-        jobs[job_id]["process"] = popener
 
     try:
         with open(log_file, "w", encoding="utf-8") as lf:
@@ -590,7 +700,11 @@ def run_job(job_id, action, params):
 
                 with jobs_lock:
                     jobs[job_id]["output"] = clamp_output(list(output_buf))
-                    if jobs[job_id].get("cancel_requested"):
+                    if (
+                        jobs[job_id].get("cancel_requested")
+                        and not jobs[job_id].get("cancel_signal_sent")
+                    ):
+                        jobs[job_id]["cancel_signal_sent"] = True
                         signaled, err_msg = terminate_process_group(popener, getattr(signal, "SIGTERM", signal.SIGINT))
                         if not signaled:
                             jobs[job_id]["output"].append(f"[WARN] {err_msg}")
@@ -611,14 +725,14 @@ def run_job(job_id, action, params):
                         force_evidence_state_terminal(
                             job_id, "failed",
                             "O processo concluiu normalmente apesar do pedido de cancelamento",
-                            "CANCELLATION_FAILED", " ".join(cmd),
+                            "CANCELLATION_FAILED", command_text,
                         )
                 else:
                     jobs[job_id].update({"status": "cancelled", "failure_type": "CANCELLED"})
                     if action in {"evidence_pipeline", "evidence_batch"}:
                         force_evidence_state_terminal(
                             job_id, "cancelled", "Execucao cancelada pelo usuario",
-                            "CANCELLED", " ".join(cmd),
+                            "CANCELLED", command_text,
                         )
             elif rc == 0:
                 jobs[job_id]["status"] = "done"
@@ -631,7 +745,7 @@ def run_job(job_id, action, params):
                         "action": action,
                         "params": params,
                         "finished_at": jobs[job_id]["finished_at"],
-                        "command": " ".join(cmd),
+                        "command": command_text,
                         "status": "done",
                     })
             else:
@@ -645,7 +759,7 @@ def run_job(job_id, action, params):
                     force_evidence_state_terminal(
                         job_id, "failed",
                         f"Processo encerrou com codigo de erro {rc}",
-                        failure_type, " ".join(cmd),
+                        failure_type, command_text,
                     )
 
     except Exception as exc:
@@ -660,7 +774,7 @@ def run_job(job_id, action, params):
                 "failure_message": str(exc),
             })
         if action in {"evidence_pipeline", "evidence_batch"}:
-            force_evidence_state_terminal(job_id, "failed", str(exc), "TOOL_FAILURE", " ".join(cmd))
+            force_evidence_state_terminal(job_id, "failed", str(exc), "TOOL_FAILURE", command_text)
 
 
 def _history_epoch(value):

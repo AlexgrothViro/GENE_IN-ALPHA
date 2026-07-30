@@ -1,4 +1,5 @@
 import { initializeGuidedDashboard } from "./js/guided.js";
+import { isActiveJobStatus } from "./js/jobs.js";
 
 // Defensive element guards - get elements safely
 const getEl = (id) => {
@@ -754,7 +755,7 @@ const rebuildEnvironment = async () => {
 
       const jobData = await jobResponse.json();
 
-      if (jobData.status === "running" || jobData.status === "queued") {
+      if (isActiveJobStatus(jobData.status)) {
         return;
       }
 
@@ -914,7 +915,7 @@ const pollJob = (jobId, action) => {
       } else showPipelineProgress(false);
 
       // Hide cancel button if job is no longer running
-      const isFinished = data.status !== "running" && data.status !== "queued";
+      const isFinished = !isActiveJobStatus(data.status);
       if (isFinished) {
         if (action === "advanced_analysis") {
           if (cancelAdvBtnEl) {
@@ -933,12 +934,19 @@ const pollJob = (jobId, action) => {
         }
       }
 
-      if (data.status === "running" || data.status === "queued") {
+      if (isActiveJobStatus(data.status)) {
         if (action === "advanced_analysis") {
-          if (advStatusEl) advStatusEl.textContent = "Executando...";
+          if (advStatusEl) {
+            advStatusEl.textContent = data.status === "cancelling"
+              ? "Cancelando..."
+              : (data.status === "starting" ? "Iniciando..." : "Executando...");
+          }
           return;
         } else {
-          return setStatus("Executando...", action);
+          const label = data.status === "cancelling"
+            ? "Cancelando..."
+            : (data.status === "starting" ? "Iniciando..." : "Executando...");
+          return setStatus(label, action);
         }
       }
 
@@ -1280,7 +1288,7 @@ const renderEvidenceStages = (state) => {
   const list = getEl("evidence-stage-list");
   if (!list) return;
   list.replaceChildren();
-  const labels = { pending: "Não iniciada", running: "Em execução", done: "Concluída", warning: "Concluída com aviso", blocked: "Bloqueada", failed: "Falhou", cancelled: "Cancelada" };
+  const labels = { pending: "Não iniciada", starting: "Iniciando", running: "Em execução", cancelling: "Cancelando", done: "Concluída", warning: "Concluída com aviso", blocked: "Bloqueada", failed: "Falhou", cancelled: "Cancelada" };
   (state.stages || []).forEach((stage) => {
     const item = document.createElement("li");
     item.className = `evidence-stage evidence-stage--${stage.status}`;
