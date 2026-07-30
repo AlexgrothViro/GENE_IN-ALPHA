@@ -56,6 +56,16 @@ class DashboardSecurityTests(unittest.TestCase):
             "pipeline", {"sample": "safe", "assembler": "spades", "db": "ptv"}
         )
         self.assertIn("scripts/20_run_pipeline.sh", command)
+        self.assertEqual(
+            command,
+            [
+                "scripts/20_run_pipeline.sh",
+                "--sample", "safe",
+                "--assembler", "spades",
+                "--analysis-profile", "canonical-e1",
+            ],
+        )
+        self.assertFalse(any(item.startswith("SAMPLE=") for item in command))
         self.assertEqual(environment["DB"], "ptv")
         self.assertEqual(environment["HOST_FILTER_ENABLED"], "false")
 
@@ -170,6 +180,55 @@ class DashboardSecurityTests(unittest.TestCase):
         self.assertEqual(environment["HOST_FILTER_ENABLED"], "true")
         self.assertEqual(environment["HOST_NAME"], "Bos taurus")
         self.assertEqual(environment["HOST_INDEX_PREFIX"], "ref/host/bos_taurus_bt2")
+
+    def test_evidence_commands_match_the_shell_parsers(self):
+        command, environment = dashboard.build_command(
+            "evidence_pipeline",
+            {
+                "sample": "safe",
+                "assembler": "metaspades",
+                "db": "custom",
+                "run_id": "run-safe-0001",
+                "analysis_profile": "canonical-e1",
+            },
+        )
+        self.assertEqual(
+            command,
+            [
+                "scripts/20_run_pipeline.sh",
+                "--sample", "safe",
+                "--assembler", "metaspades",
+                "--analysis-profile", "canonical-e1",
+                "--evidence-v2",
+                "--evidence-config", "config/evidence_v2.yaml",
+            ],
+        )
+        self.assertEqual(environment["EVIDENCE_RUN_ID"], "run-safe-0001")
+        self.assertNotIn("--run-id=run-safe-0001", command)
+        self.assertFalse(any(item.startswith("--db") for item in command))
+
+        with patch.object(
+            dashboard.EVIDENCE_SERVICE,
+            "manifest_export",
+            return_value=ROOT / "manifest.tsv",
+        ):
+            batch_command, _ = dashboard.build_command(
+                "evidence_batch",
+                {
+                    "manifest_id": "batch-safe",
+                    "target": "custom",
+                    "run_id": "batch-run-0001",
+                },
+            )
+        self.assertEqual(
+            batch_command,
+            [
+                "scripts/23_run_batch.sh",
+                "--batch-manifest", str(ROOT / "manifest.tsv"),
+                "--run-id", "batch-run-0001",
+                "--config", "config/evidence_v2.yaml",
+            ],
+        )
 
     def test_dashboard_contract_has_no_silent_host_or_scientific_authority_label(self):
         html = (ROOT / "dashboard/index.html").read_text(encoding="utf-8")

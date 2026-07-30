@@ -520,8 +520,19 @@ def build_command(action, params):
         assembler = (params.get("assembler") or "spades").strip().lower()
         if assembler not in {"velvet", "spades", "metaspades"}:
             raise ValueError("assembler invalido")
-        alias_db = _DB_ALIAS.get(db, db)
-        cmd = ["scripts/20_run_pipeline.sh", f"SAMPLE={sample}", f"ASSEMBLER={assembler}", f"DB={alias_db}"]
+        analysis_profile = (
+            params.get("analysis_profile") or "canonical-e1"
+        ).strip()
+        cmd = [
+            "scripts/20_run_pipeline.sh",
+            "--sample", sample,
+            "--assembler", assembler,
+            "--analysis-profile", analysis_profile,
+        ]
+        if params.get("kmer") not in (None, ""):
+            cmd.extend(["--kmer", str(params["kmer"])])
+        if params.get("skip_qc"):
+            cmd.append("--skip-qc")
 
     elif action == "report":
         sample = validate_sample_id(params["sample"])
@@ -533,32 +544,38 @@ def build_command(action, params):
         assembler = (params.get("assembler") or "spades").strip().lower()
         if assembler not in {"velvet", "spades", "metaspades"}:
             raise ValueError("assembler invalido")
-        alias_db = _DB_ALIAS.get(db, db)
-        profile = (params.get("profile") or "default").strip()
+        profile = (
+            params.get("analysis_profile")
+            or params.get("profile")
+            or "canonical-e1"
+        ).strip()
+        config = str(params.get("config") or "config/evidence_v2.yaml").strip()
         token = params.get("reservation_token", "")
         cmd = [
             "scripts/20_run_pipeline.sh",
-            f"--sample={sample}",
-            f"--run-id={run_id}",
-            f"--assembler={assembler}",
-            f"--db={alias_db}",
-            f"--profile={profile}",
+            "--sample", sample,
+            "--assembler", assembler,
+            "--analysis-profile", profile,
+            "--evidence-v2",
+            "--evidence-config", config,
         ]
+        env["EVIDENCE_RUN_ID"] = run_id
         if token:
-            cmd.append(f"--reservation-token={token}")
             env["EVIDENCE_RESERVATION_TOKEN"] = token
 
     elif action == "evidence_batch":
         manifest_id = validate_sample_id(params["manifest_id"])
         run_id = validate_run_id(params.get("run_id") or "dashboard-run-00000000")
+        manifest_path = get_evidence_service().manifest_export(manifest_id)
+        config = str(params.get("config") or "config/evidence_v2.yaml").strip()
         token = params.get("reservation_token", "")
         cmd = [
             "scripts/23_run_batch.sh",
-            f"--manifest={manifest_id}",
-            f"--run-id={run_id}",
+            "--batch-manifest", str(manifest_path),
+            "--run-id", run_id,
+            "--config", config,
         ]
         if token:
-            cmd.append(f"--reservation-token={token}")
             env["EVIDENCE_RESERVATION_TOKEN"] = token
 
     elif action in {"build_db", "db_build"}:
