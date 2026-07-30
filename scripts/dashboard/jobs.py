@@ -616,6 +616,15 @@ def build_command(action, params):
 
 def run_job(job_id, action, params):
     output_buf = []
+    log_file = LOG_DIR / f"ux_{job_id}.log"
+    if not claim_job_for_execution(job_id, "", str(log_file)):
+        if action in {"evidence_pipeline", "evidence_batch"}:
+            force_evidence_state_terminal(
+                job_id, "cancelled",
+                "Execução cancelada antes da preparação do processo.",
+                "CANCELLED",
+            )
+        return
 
     env = dict(os.environ)
 
@@ -623,6 +632,8 @@ def run_job(job_id, action, params):
         env.update(host_env_from_params(params))
     except ValueError as exc:
         with jobs_lock:
+            if jobs[job_id].get("status") == "cancelled":
+                return
             jobs[job_id].update({
                 "status": "failed",
                 "output": [f"[ERRO] Parametros de hospedeiro invalidos: {exc}"],
@@ -644,6 +655,8 @@ def run_job(job_id, action, params):
         env.update(extra_env)
     except (ValueError, KeyError) as e:
         with jobs_lock:
+            if jobs[job_id].get("status") == "cancelled":
+                return
             jobs[job_id].update({
                 "status": "failed",
                 "output": [f"[ERRO] Parametros invalidos: {e}"],
@@ -655,10 +668,17 @@ def run_job(job_id, action, params):
             force_evidence_state_terminal(job_id, "failed", str(e), "INPUT_INVALID")
         return
 
-    log_file = LOG_DIR / f"ux_{job_id}.log"
     command_text = " ".join(cmd)
-    if not claim_job_for_execution(job_id, command_text, str(log_file)):
-        if action in {"evidence_pipeline", "evidence_batch"}:
+    with jobs_lock:
+        status_before_launch = jobs[job_id].get("status")
+        can_launch = status_before_launch == "starting"
+        if can_launch:
+            jobs[job_id]["command"] = command_text
+    if not can_launch:
+        if (
+            status_before_launch == "cancelled"
+            and action in {"evidence_pipeline", "evidence_batch"}
+        ):
             force_evidence_state_terminal(
                 job_id, "cancelled",
                 "Execução cancelada antes do lançamento do processo.",
