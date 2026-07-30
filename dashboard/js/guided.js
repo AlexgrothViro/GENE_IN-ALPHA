@@ -121,6 +121,32 @@ function renderNextAction(state) {
   if (icon) icon.textContent = warning ? "⚠️" : "➡️";
 }
 
+function renderPreflightDetail(result) {
+  const node = document.getElementById("preflight-detail");
+  if (!node) return;
+  node.replaceChildren();
+  const summary = result?.summary || "Não foi possível obter o preflight do ambiente.";
+  const pathSource = result?.path_source ? `Origem do PATH: ${result.path_source}.` : "";
+  node.append(
+    createElement(document, "strong", { text: result?.ok ? "Ambiente pronto. " : "Ambiente com pendências. " }),
+    createElement(document, "span", { text: summary }),
+  );
+  if (pathSource) node.append(document.createTextNode(` ${pathSource}`));
+  const tools = Array.isArray(result?.tools) ? result.tools : [];
+  if (!tools.length) return;
+  const list = createElement(document, "ul", { class: "preflight-tool-list" });
+  tools.forEach((tool) => {
+    const state = tool.present ? "disponível" : (tool.required ? "ausente" : "opcional");
+    const item = createElement(document, "li", { dataset: { state: tool.present ? "ok" : (tool.required ? "missing" : "optional") } });
+    item.append(
+      createElement(document, "strong", { text: tool.name || "ferramenta" }),
+      document.createTextNode(` — ${state}${tool.path ? ` (${tool.path})` : ""}`),
+    );
+    list.append(item);
+  });
+  node.append(list);
+}
+
 function renderStepper(state) {
   const list = document.getElementById("ux-stepper");
   if (!list) return;
@@ -398,11 +424,13 @@ function synchronizeTabs() {
 async function loadPreflight() {
   try {
     const result = await getJSON("/api/preflight");
+    renderPreflightDetail(result);
     uiStore.set({
       environment: result.ok ? "ok" : "pending",
       environmentSummary: result.summary || (result.ok ? "Ambiente pronto." : "Ambiente com pendências."),
     });
   } catch (_) {
+    renderPreflightDetail({ summary: "Não foi possível verificar as ferramentas do ambiente efetivo." });
     uiStore.set({
       environment: "error",
       environmentSummary: "Não foi possível verificar as ferramentas do ambiente efetivo.",

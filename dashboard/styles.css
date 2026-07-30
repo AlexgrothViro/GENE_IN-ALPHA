@@ -1497,6 +1497,28 @@ textarea:focus-visible,
 .next-action__label { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ux-muted); }
 .next-action__text { font-weight: 600; color: #1b1f2a; overflow-wrap: anywhere; }
 
+.preflight-detail {
+  margin: 0.85rem 0 1rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--border, #dfe5ec);
+  border-radius: 0.55rem;
+  background: #f8fafc;
+  color: var(--text-muted, #52606d);
+  font-size: 0.9rem;
+}
+
+.preflight-tool-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.3rem 1rem;
+  margin: 0.65rem 0 0;
+  padding-left: 1.15rem;
+}
+
+.preflight-tool-list li[data-state="ok"] { color: #23633f; }
+.preflight-tool-list li[data-state="missing"] { color: #a33a32; }
+.preflight-tool-list li[data-state="optional"] { color: #6b7280; }
+
 main > *,
 .tab-panel,
 .ux-wizard-head {
