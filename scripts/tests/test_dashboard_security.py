@@ -63,12 +63,20 @@ class DashboardSecurityTests(unittest.TestCase):
         check_command, _ = dashboard.build_command("check_env", {})
         demo_command, _ = dashboard.build_command("demo", {})
         db_command, _ = dashboard.build_command("build_db", {"db": "ptv"})
+        target_command, _ = dashboard.build_command("build_db", {"target": "teschovirus_a"})
+        custom_command, custom_env = dashboard.build_command(
+            "build_db", {"query": '"Zika virus"[Organism]'}
+        )
         assembly_command, _ = dashboard.build_command(
             "assembly_only", {"sample": "safe", "assembler": "spades"}
         )
         self.assertEqual(check_command, ["bash", "scripts/00_check_env.sh"])
         self.assertEqual(demo_command, ["make", "demo"])
         self.assertIn("make", db_command)
+        self.assertIn("DB=ptv", target_command)
+        self.assertEqual(custom_command, ["bash", "scripts/13_db_manager.sh", "setup"])
+        self.assertEqual(custom_env["DB"], "custom")
+        self.assertIn("Zika virus", custom_env["DB_QUERY"])
         self.assertIn("scripts/22_run_assembly_only.sh", assembly_command)
 
     def test_evidence_requires_database_and_defaults_to_no_host_filter(self):

@@ -430,7 +430,16 @@ def build_command(action, params):
             env["EVIDENCE_RESERVATION_TOKEN"] = token
 
     elif action in {"build_db", "db_build"}:
-        db_name = (params.get("db") or "").strip().lower()
+        db_name = (params.get("db") or params.get("target") or "").strip().lower()
+        query = (params.get("query") or params.get("db_query") or "").strip()
+        if not db_name and query:
+            env["DB"] = "custom"
+            env["DB_QUERY"] = query
+            if params.get("ncbi_db"):
+                env["NCBI_DB"] = str(params["ncbi_db"]).strip()
+            return ["bash", "scripts/13_db_manager.sh", "setup"], env
+        if not db_name:
+            raise ValueError("Selecione um banco de referencia ou informe uma query NCBI customizada.")
         alias_db = _DB_ALIAS.get(db_name, db_name)
 
         target_file = get_repo_root() / "config" / "targets.json"
@@ -438,7 +447,11 @@ def build_command(action, params):
         if target_file.exists():
             try:
                 targets_data = json.loads(target_file.read_text(encoding="utf-8"))
-                known_targets = {t["id"] for t in targets_data if "id" in t}
+                known_targets = {
+                    t.get("id") or t.get("key")
+                    for t in targets_data
+                    if isinstance(t, dict) and (t.get("id") or t.get("key"))
+                }
             except Exception:
                 pass
 
