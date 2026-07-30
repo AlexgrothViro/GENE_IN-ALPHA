@@ -69,6 +69,54 @@ class DashboardSecurityTests(unittest.TestCase):
         self.assertEqual(environment["DB"], "ptv")
         self.assertEqual(environment["HOST_FILTER_ENABLED"], "false")
 
+    def test_pipeline_propagates_custom_database_provenance(self):
+        command, environment = dashboard.build_command(
+            "pipeline",
+            {
+                "sample": "zikaer",
+                "assembler": "velvet",
+                "db": "custom",
+                "db_query": "Orthoflavivirus zikaense",
+                "ncbi_db": "nucleotide",
+            },
+        )
+        self.assertEqual(command[1:3], ["--sample", "zikaer"])
+        self.assertEqual(environment["DB"], "custom")
+        self.assertEqual(
+            environment["DB_QUERY"], "Orthoflavivirus zikaense"
+        )
+        self.assertEqual(environment["NCBI_DB"], "nucleotide")
+
+    def test_pipeline_recovers_custom_query_from_database_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            metadata_dir = repo_root / "db" / "custom"
+            metadata_dir.mkdir(parents=True)
+            (metadata_dir / "metadata.json").write_text(
+                json.dumps(
+                    {
+                        "db": "custom",
+                        "db_query": "Orthoflavivirus zikaense",
+                        "ncbi_db": "nucleotide",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.dict(
+                dashboard.build_command.__globals__,
+                {"REPO_ROOT": repo_root},
+            ):
+                _, environment = dashboard.build_command(
+                    "pipeline",
+                    {
+                        "sample": "zikaer",
+                        "assembler": "velvet",
+                        "db": "custom",
+                    },
+                )
+        self.assertEqual(environment["DB_QUERY"], "Orthoflavivirus zikaense")
+        self.assertEqual(environment["NCBI_DB"], "nucleotide")
+
     def test_unknown_host_selection_is_an_explicit_safe_opt_out(self):
         host_environment = dashboard.host_env_from_params(
             {"host_filter_mode": "none"}

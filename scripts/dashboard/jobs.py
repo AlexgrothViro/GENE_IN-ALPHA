@@ -465,6 +465,32 @@ def parse_pipeline_details(params):
     return parsed
 
 
+def custom_database_env(params):
+    query = str(params.get("db_query") or params.get("query") or "").strip()
+    ncbi_db = str(params.get("ncbi_db") or "").strip()
+
+    if not query:
+        metadata_path = REPO_ROOT / "db" / "custom" / "metadata.json"
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            metadata = {}
+        if metadata.get("db") == "custom":
+            query = str(metadata.get("db_query") or "").strip()
+            if not ncbi_db:
+                ncbi_db = str(metadata.get("ncbi_db") or "").strip()
+
+    if not query:
+        raise ValueError(
+            "Banco customizado exige uma query NCBI ou metadados de um banco previamente preparado"
+        )
+
+    result = {"DB_QUERY": query}
+    if ncbi_db:
+        result["NCBI_DB"] = ncbi_db
+    return result
+
+
 def build_command(action, params):
     cmd = []
     env = {}
@@ -475,6 +501,8 @@ def build_command(action, params):
             raise ValueError("A seleção do banco de referência é obrigatória e deve ser feita explicitamente.")
         alias_db = _DB_ALIAS.get(db, db)
         env["DB"] = alias_db
+        if alias_db == "custom":
+            env.update(custom_database_env(params))
 
         host_mode = str(params.get("host_filter_mode") or "none").strip().lower()
         if host_mode == "none":
