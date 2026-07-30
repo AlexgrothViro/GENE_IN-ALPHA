@@ -85,6 +85,12 @@ fi
 if [[ -z "$BLAST_DB_PATH" ]]; then
   echo "[ERRO] --db é obrigatório." >&2; exit 1
 fi
+SAMPLE="$(python3 "${SCRIPT_DIR}/lib/input_validation.py" sample "$SAMPLE")"
+if ! python3 -c 'import math,sys; values=[float(x) for x in sys.argv[1:3]]; threads=int(sys.argv[3]); sys.exit(0 if all(math.isfinite(x) and 0 <= x <= 100 for x in values) and threads > 0 else 1)' \
+  "$MIN_PID" "$MIN_QCOV" "$THREADS"; then
+  echo "[ERRO] --min-pid/--min-qcov devem estar em 0..100 e --threads deve ser positivo." >&2
+  exit 2
+fi
 
 if [[ ! -f "$INPUT_FASTA" ]]; then
   echo "[AVISO] FASTA de fragmentos curtos não encontrado: $INPUT_FASTA"
@@ -99,9 +105,10 @@ if [[ "${SEQ_COUNT:-0}" -eq 0 ]]; then
   echo "        Etapa SHORT_FRAGMENT_BLAST ignorada."
   exit 0
 fi
+python3 "${SCRIPT_DIR}/lib/input_validation.py" fasta "$INPUT_FASTA" >/dev/null
 
-if [[ ! -f "${BLAST_DB_PATH}.nhr" ]]; then
-  echo "[ERRO] Banco BLAST não encontrado em ${BLAST_DB_PATH}.nhr" >&2
+if ! command -v blastdbcmd >/dev/null 2>&1 || ! blastdbcmd -db "$BLAST_DB_PATH" -info >/dev/null 2>&1; then
+  echo "[ERRO] Banco BLAST inválido ou incompleto: ${BLAST_DB_PATH}" >&2
   exit 1
 fi
 
@@ -113,6 +120,7 @@ mkdir -p "$OUTDIR"
 
 BLAST_RAW="${OUTDIR}/${SAMPLE}_short_fragments_blast.tsv"
 BLAST_FILTERED="${OUTDIR}/${SAMPLE}_short_fragments_filtered.tsv"
+BLAST_FILTERED_PROVENANCE="${OUTDIR}/${SAMPLE}_short_fragments_filtered_provenance.json"
 
 echo "[05] BLAST sensível para fragmentos curtos"
 echo "     Amostra : $SAMPLE"
@@ -141,8 +149,10 @@ echo "     Hits brutos: $RAW_HITS"
 # ---------------------------------------------------------------------------
 
 # Cabeçalho para o filtered TSV
+BLAST_FILTERED_TMP="${BLAST_FILTERED}.tmp.$$"
+trap 'rm -f "$BLAST_FILTERED_TMP"' EXIT
 printf 'qseqid\tsseqid\tpident\tlength\tmismatch\tgapopen\tqstart\tqend\tsstart\tsend\tevalue\tbitscore\tqlen\tslen\tqcov\n' \
-  > "$BLAST_FILTERED"
+  > "$BLAST_FILTERED_TMP"
 
 awk -v min_pid="$MIN_PID" -v min_qcov="$MIN_QCOV" '
 BEGIN { OFS="\t" }
@@ -165,12 +175,22 @@ BEGIN { OFS="\t" }
       qstart, qend, sstart, send, evalue, bitscore, qlen, slen, qcov
   }
 }
-' "$BLAST_RAW" >> "$BLAST_FILTERED"
+' "$BLAST_RAW" >> "$BLAST_FILTERED_TMP"
+mv -f "$BLAST_FILTERED_TMP" "$BLAST_FILTERED"
+trap - EXIT
+python3 "$SCRIPT_DIR/evidence/write_provenance.py" \
+  --config "$EVIDENCE_CONFIG" --out "$BLAST_FILTERED_PROVENANCE" \
+  --artifact "query_fasta=$INPUT_FASTA" --artifact "blast_raw=$BLAST_RAW" \
+  --artifact "blast_filtered=$BLAST_FILTERED" \
+  --value "sample_id=$SAMPLE" --value "minimum_pident_percent=$MIN_PID" \
+  --value "minimum_query_coverage_percent=$MIN_QCOV" \
+  --value "blast_parameter_source=blast_routing_provenance"
 
 FILTERED_HITS=$(( $(wc -l < "$BLAST_FILTERED") - 1 ))  # descontar cabeçalho
 echo "     Hits filtrados (pident>=${MIN_PID}% qcov>=${MIN_QCOV}%): $FILTERED_HITS"
 echo "     Resultado bruto   : $BLAST_RAW"
 echo "     Resultado filtrado: $BLAST_FILTERED"
+echo "     Proveniência      : $BLAST_FILTERED_PROVENANCE"
 
 if [[ "$FILTERED_HITS" -eq 0 ]]; then
   echo "[AVISO] Nenhum hit passou os filtros de identidade e cobertura."

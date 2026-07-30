@@ -7,6 +7,7 @@ import json
 import math
 import os
 import tempfile
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Iterable, Iterator
@@ -114,9 +115,31 @@ def fsync_directory(path: str | Path) -> None:
         os.close(descriptor)
 
 
+def fsync_file(path: str | Path) -> None:
+    """Durably persist an existing file on POSIX and Windows."""
+    # The Windows CRT rejects fsync() on a read-only descriptor (EBADF).
+    mode = "rb+" if os.name == "nt" else "rb"
+    with Path(path).open(mode) as handle:
+        os.fsync(handle.fileno())
+
+
 def _flush_and_sync(handle: object) -> None:
     handle.flush()
     os.fsync(handle.fileno())
+
+
+def replace_atomic(source: str | Path, target: str | Path, *, attempts: int = 40) -> None:
+    """Replace a file atomically, tolerating transient Windows reader locks."""
+    source_path = Path(source)
+    target_path = Path(target)
+    for attempt in range(attempts):
+        try:
+            os.replace(source_path, target_path)
+            return
+        except PermissionError:
+            if os.name != "nt" or attempt + 1 >= attempts:
+                raise
+            time.sleep(min(0.005 * (attempt + 1), 0.1))
 
 
 def write_tsv_atomic(path: str | Path, rows: Iterable[dict], fieldnames: list[str]) -> None:
@@ -129,7 +152,7 @@ def write_tsv_atomic(path: str | Path, rows: Iterable[dict], fieldnames: list[st
             for row in rows:
                 writer.writerow({name: row.get(name, "") for name in fieldnames})
             _flush_and_sync(handle)
-        os.replace(tmp, target)
+        replace_atomic(tmp, target)
         fsync_directory(target.parent)
     finally:
         if tmp.exists():
@@ -144,7 +167,7 @@ def write_json_atomic(path: str | Path, value: object) -> None:
             json.dump(value, handle, indent=2, ensure_ascii=False, sort_keys=True)
             handle.write("\n")
             _flush_and_sync(handle)
-        os.replace(tmp, target)
+        replace_atomic(tmp, target)
         fsync_directory(target.parent)
     finally:
         if tmp.exists():
@@ -158,7 +181,7 @@ def write_text_atomic(path: str | Path, value: str) -> None:
         with handle:
             handle.write(value)
             _flush_and_sync(handle)
-        os.replace(tmp, target)
+        replace_atomic(tmp, target)
         fsync_directory(target.parent)
     finally:
         if tmp.exists():

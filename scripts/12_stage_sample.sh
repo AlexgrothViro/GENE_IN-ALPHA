@@ -113,6 +113,7 @@ stage_file() {
 
 if [[ -n "$SINGLE" ]]; then
   SINGLE="$(resolve_path "$SINGLE")"
+  python3 "${SCRIPT_DIR}/lib/input_validation.py" fastq "$SINGLE"
   OUT_SINGLE="${RAW_DIR}/${ID}.fastq.gz"
   log_info "Staging single-end para ${OUT_SINGLE}"
   stage_file "$SINGLE" "$OUT_SINGLE"

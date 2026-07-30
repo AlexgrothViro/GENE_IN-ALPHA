@@ -41,7 +41,11 @@ keys/
 *.bak
 *.bak_*
 *.bak.*
+*.bak-*
 *BROKEN*.bak
+
+# Temporarios gerados durante manutencao local
+tmp_ux_orig.py
 
 # =========================
 # Config local sensivel (não versionar)
@@ -60,3 +64,11 @@ __pycache__/
 .env
 .vscode/
 .idea/
+
+# =========================
+# Notas internas de desenvolvimento (não publicar no GitHub)
+# =========================
+# Auditorias, matrizes de remediação, relatórios de estado
+# técnico e outras notas de trabalho que não são documentação pública do
+# projeto. Ficam disponíveis localmente para quem trabalha no repositório.
+internal/

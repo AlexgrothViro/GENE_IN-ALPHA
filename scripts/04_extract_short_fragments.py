@@ -5,27 +5,17 @@ import argparse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
-from input_validation import validate_sample_id
+from input_validation import iter_fasta, validate_sample_id
 
 def read_fasta(file_path):
-    sequences = []
-    current_header = None
-    current_seq = []
-    with open(file_path, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            if line.startswith('>'):
-                if current_header is not None:
-                    sequences.append((current_header, "".join(current_seq)))
-                current_header = line
-                current_seq = []
-            else:
-                current_seq.append(line)
-        if current_header is not None:
-            sequences.append((current_header, "".join(current_seq)))
-    return sequences
+    return [(f">{name}", sequence) for name, sequence in iter_fasta(Path(file_path))]
+
+
+def write_atomic(path, content):
+    path = Path(path)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(content, encoding="utf-8", newline="\n")
+    os.replace(temporary, path)
 
 def main():
     parser = argparse.ArgumentParser(description="Extract and deduplicate short fragments from FASTA file.")
@@ -43,8 +33,8 @@ def main():
     except ValueError as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         sys.exit(2)
-    if args.min_len < 0 or args.max_len < args.min_len:
-        print("[ERROR] intervalo de comprimento invalido", file=sys.stderr)
+    if args.min_len < 20 or args.max_len < args.min_len:
+        print("[ERROR] intervalo invalido: fragmentos exploratorios comecam em 20 bp", file=sys.stderr)
         sys.exit(2)
 
     if not os.path.exists(args.input):
@@ -71,9 +61,7 @@ def main():
     # Write output FASTA (bruto)
     out_fasta = os.path.join(args.out_dir, f"{args.sample}_short_fragments.fa")
     try:
-        with open(out_fasta, "w") as f:
-            for header, seq in kept_sequences:
-                f.write(f"{header}\n{seq}\n")
+        write_atomic(out_fasta, "".join(f"{header}\n{seq}\n" for header, seq in kept_sequences))
     except Exception as e:
         print(f"[ERROR] Failed to write output FASTA file: {e}", file=sys.stderr)
         sys.exit(1)
@@ -101,13 +89,10 @@ def main():
         # Write unique FASTA
         unique_fasta = os.path.join(args.out_dir, f"{args.sample}_short_fragments_unique.fa")
         try:
-            with open(unique_fasta, "w") as f:
-                for idx, seq_upper in enumerate(seq_order, 1):
-                    item = seq_map[seq_upper]
-                    unique_id = f"unique_{idx:06d}"
-                    rep_header = item['header'].lstrip('>')
-                    new_header = f">{args.sample}|{unique_id}|count={item['count']}|representative={rep_header}"
-                    f.write(f"{new_header}\n{item['seq']}\n")
+            write_atomic(unique_fasta, "".join(
+                f">{args.sample}|unique_{idx:06d}|count={item['count']}|representative={item['header'].lstrip('>')}\n{item['seq']}\n"
+                for idx, item in enumerate((seq_map[s] for s in seq_order), 1)
+            ))
         except Exception as e:
             print(f"[ERROR] Failed to write output unique FASTA file: {e}", file=sys.stderr)
             sys.exit(1)
@@ -115,13 +100,12 @@ def main():
         # Write dedup TSV
         dedup_tsv = os.path.join(args.out_dir, f"{args.sample}_short_fragments_dedup.tsv")
         try:
-            with open(dedup_tsv, "w") as f:
-                f.write("sample\tunique_id\tcount\tlength\trepresentative_header\n")
-                for idx, seq_upper in enumerate(seq_order, 1):
-                    item = seq_map[seq_upper]
-                    unique_id = f"unique_{idx:06d}"
-                    rep_header = item['header'].lstrip('>')
-                    f.write(f"{args.sample}\t{unique_id}\t{item['count']}\t{item['length']}\t{rep_header}\n")
+            write_atomic(dedup_tsv, "".join(
+                ["sample\tunique_id\tcount\tlength\trepresentative_header\n"] + [
+                    f"{args.sample}\tunique_{idx:06d}\t{item['count']}\t{item['length']}\t{item['header'].lstrip('>')}\n"
+                    for idx, item in enumerate((seq_map[s] for s in seq_order), 1)
+                ]
+            ))
         except Exception as e:
             print(f"[ERROR] Failed to write output dedup TSV file: {e}", file=sys.stderr)
             sys.exit(1)
@@ -129,9 +113,8 @@ def main():
     # Write output stats TSV
     out_tsv = os.path.join(args.out_dir, f"{args.sample}_short_fragments_stats.tsv")
     try:
-        with open(out_tsv, "w") as f:
-            f.write("sample\tinput_fasta\tmin_len\tmax_len\ttotal_sequences\tkept_sequences\tunique_sequences\n")
-            f.write(f"{args.sample}\t{os.path.basename(args.input)}\t{args.min_len}\t{args.max_len}\t{total_sequences}\t{len(kept_sequences)}\t{unique_sequences_count}\n")
+        write_atomic(out_tsv, "sample\tinput_fasta\tmin_len\tmax_len\ttotal_sequences\tkept_sequences\tunique_sequences\n" +
+                     f"{args.sample}\t{os.path.basename(args.input)}\t{args.min_len}\t{args.max_len}\t{total_sequences}\t{len(kept_sequences)}\t{unique_sequences_count}\n")
     except Exception as e:
         print(f"[ERROR] Failed to write output stats TSV file: {e}", file=sys.stderr)
         sys.exit(1)

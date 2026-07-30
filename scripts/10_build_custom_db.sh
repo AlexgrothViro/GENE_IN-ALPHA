@@ -7,11 +7,14 @@ REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 CONFIG_FILE="${REPO_ROOT}/config/picornavirus.env"
 LEGACY_CONFIG="${REPO_ROOT}/config.env"
 if [[ -f "${CONFIG_FILE}" ]]; then
+  # shellcheck disable=SC1090
   source "${CONFIG_FILE}"
 elif [[ -f "${LEGACY_CONFIG}" ]]; then
+  # shellcheck disable=SC1090
   source "${LEGACY_CONFIG}"
 fi
 
+# shellcheck disable=SC1091
 source "${SCRIPT_DIR}/lib/common.sh"
 
 if [[ ! -f "${CONFIG_FILE}" && ! -f "${LEGACY_CONFIG}" ]]; then
@@ -38,8 +41,9 @@ log_info "[DB] Baixando FASTA..."
 
 FASTA_TMP="${FASTA}.download.$$"
 trap 'rm -f "$FASTA_TMP"' EXIT
-esearch -db nucleotide -query "$QUERY" -retmax "$RETMAX" | \
-  efetch -format fasta > "$FASTA_TMP"
+if ! fetch_ncbi_fasta "$FASTA_TMP" nucleotide "$QUERY" "$RETMAX"; then
+  log_error "Download NCBI falhou apos ${EDIRECT_RETRIES:-3} tentativa(s); o FASTA existente nao foi substituido. Revise a conectividade TLS e a query."
+fi
 python3 "${SCRIPT_DIR}/lib/input_validation.py" fasta "$FASTA_TMP"
 mv -f "$FASTA_TMP" "$FASTA"
 

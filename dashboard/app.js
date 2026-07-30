@@ -1,3 +1,5 @@
+import { initializeGuidedDashboard } from "./js/guided.js";
+
 // Defensive element guards - get elements safely
 const getEl = (id) => {
   const el = document.getElementById(id);
@@ -37,6 +39,8 @@ const assemblyOnlyStatusEl = getEl("assembly-only-status");
 const hostFilterModeEl = getEl("host-filter-mode");
 const hostIndexPrefixEl = getEl("host-index-prefix");
 const hostIndexStatusEl = getEl("host-index-status");
+const evidenceHostFilterModeEl = getEl("evidence-host-filter-mode");
+const evidenceBatchHostFilterModeEl = getEl("evidence-batch-host-filter-mode");
 
 // Elements for tab-analise-avancada
 const advancedSampleSelectEl = getEl("advanced-sample-select");
@@ -431,9 +435,9 @@ const loadReportInline = async (runDir) => {
   if (!runDir) return setReportContent("Sem informações de diretório para carregar o resumo.");
   try {
     const response = await fetch(`/api/history/file?run=${encodeURIComponent(runDir)}&type=report`);
-    if (!response.ok) return setReportContent("O pipeline foi concluído, mas nenhum relatório final foi gerado. Isso pode ocorrer se nenhum hit viral significativo foi encontrado.");
+    if (!response.ok) return setReportContent("O pipeline terminou, mas nenhum relatório final validado foi disponibilizado. Consulte o log e os artefatos da execução.");
     const text = await response.text();
-    if (!text.trim()) return setReportContent("Relatório vazio. Nenhum contig candidato passou nos filtros finais.");
+    if (!text.trim()) return setReportContent("Relatório vazio; isso não demonstra ausência de material viral.");
     setReportContent(text);
   } catch (err) {
     console.error("Falha ao carregar resumo", err);
@@ -467,6 +471,26 @@ const rerunHistory = async (runDir) => {
   }
 };
 
+const activateDashboardTab = (panelId, { focus = false } = {}) => {
+  const tabs = Array.from(document.querySelectorAll(".tab"));
+  tabs.forEach((item) => {
+    const active = item.dataset.tab === panelId;
+    item.classList.toggle("active", active);
+    item.setAttribute("aria-selected", String(active));
+    item.tabIndex = active ? 0 : -1;
+    if (active && focus) item.focus();
+  });
+  document.querySelectorAll(".tab-panel").forEach((panel) => {
+    panel.classList.toggle("active", panel.id === panelId);
+  });
+  if (panelId === "tab-historico") fetchHistory();
+  if (panelId === "tab-analise-avancada") fetchSamples();
+  if (panelId === "tab-configuracao") {
+    loadEnvironmentStatus();
+    loadConfigEnv();
+  }
+};
+
 const renderHistory = (runs) => {
   if (!historyListEl) return;
   if (!runs.length) {
@@ -481,12 +505,14 @@ const renderHistory = (runs) => {
       const alpha2Valid = run.valid_alpha2 === true;
       const successful = alpha2Valid && (run.status === "done" || run.status === "done_with_warning");
       const evidenceLabel = alpha2Valid ? "Evidence V2 Alpha.2 experimental" : (run.compatibility_status || "NOT_EVALUABLE");
-      const openLabel = alpha2Valid ? "Abrir resultado experimental" : "Abrir estado incompat\u00edvel";
+      const openLabel = alpha2Valid
+        ? "Abrir resultado experimental"
+        : (run.complete ? "Abrir estado incompatível" : "Abrir estado operacional");
       card.innerHTML = `
         <header><h3>${escapeHTML(run.sample) || "(lote V2)"}</h3><span class="badge ${successful ? "ok" : "error"}">${escapeHTML(run.status || "unknown")}</span></header>
-        <p><strong>Evidence V2 experimental</strong> · shadow mode · run_id ${escapeHTML(run.run_id)}</p>
+        <p><strong>Evidence V2 experimental</strong> · teto E1 · run_id ${escapeHTML(run.run_id)}</p>
         <p><strong>Início:</strong> ${escapeHTML((run.start || "-").replace("T", " "))} • <strong>Fim:</strong> ${escapeHTML((run.end || "-").replace("T", " "))}</p>
-        <div class="actions"><button data-evidence-open="1" ${run.complete ? "" : "disabled"}>Abrir resultado experimental</button></div>`;
+        <div class="actions"><button data-evidence-open="1">Abrir resultado experimental</button></div>`;
       const evidenceHeading = card.querySelector("p strong");
       if (evidenceHeading) evidenceHeading.textContent = evidenceLabel;
       const openButton = card.querySelector("button[data-evidence-open]");
@@ -501,10 +527,15 @@ const renderHistory = (runs) => {
         warning.textContent = run.experimental_warning;
         if (actions) card.insertBefore(warning, actions);
       }
+      if (run.failure_message || run.compatibility_message) {
+        const detail = document.createElement("p");
+        detail.className = "status-line error";
+        detail.textContent = run.failure_message || run.compatibility_message;
+        if (actions) card.insertBefore(detail, actions);
+      }
       card.querySelector("button[data-evidence-open]")?.addEventListener("click", async () => {
         activeEvidenceRunId = run.run_id;
-        document.querySelectorAll(".tab").forEach((item) => item.classList.toggle("active", item.dataset.tab === "tab-evidence-v2"));
-        document.querySelectorAll(".tab-panel").forEach((panel) => panel.classList.toggle("active", panel.id === "tab-evidence-v2"));
+        activateDashboardTab("tab-evidence-v2");
         try { renderEvidenceStages(await evidenceApi(`/api/evidence/run?id=${encodeURIComponent(run.run_id)}`)); renderEvidenceResult(await evidenceApi(`/api/evidence/result?run=${encodeURIComponent(run.run_id)}`)); }
         catch (error) { setEvidenceText("evidence-run-status", error.message, "error"); }
       });
@@ -519,7 +550,7 @@ const renderHistory = (runs) => {
         <button data-open="report">📋 Abrir Report</button>
         <button data-open="log">⚙️ Abrir Log</button>
         <button data-open="blast">🔍 BLAST Bruto</button>
-        <button data-open="labeled" class="primary">🔬 Validação Científica</button>
+        <button data-open="labeled" class="primary">🔬 Revisar hits classificados</button>
         <button data-open="adj_identity">📊 Identidade Adj.</button>
         ${run.paths && run.paths.run_hit_contigs_fasta ? `<button data-open="hit_contigs_fasta">⬇ FASTA Hits</button>` : ''}
         <button data-rerun="1">🔄 Reexecutar</button>
@@ -603,7 +634,7 @@ const loadConfigEnv = async () => {
 };
 
 const updateHostFilterFields = () => {
-  const mode = hostFilterModeEl ? hostFilterModeEl.value : "sus_scrofa";
+  const mode = hostFilterModeEl ? hostFilterModeEl.value : "none";
   document.querySelectorAll("[data-host-custom]").forEach((el) => {
     el.hidden = mode !== "custom";
   });
@@ -620,7 +651,7 @@ const setHostIndexStatus = (message, ok = null) => {
 };
 
 const validateCustomHostIndex = async () => {
-  const mode = hostFilterModeEl ? hostFilterModeEl.value : "sus_scrofa";
+  const mode = hostFilterModeEl ? hostFilterModeEl.value : "none";
   if (mode !== "custom") return true;
   const prefix = (hostIndexPrefixEl?.value || "").trim();
   if (!prefix) {
@@ -1063,10 +1094,11 @@ const bindButtons = () => {
     if (!(await validateCustomHostIndex())) return;
     const params = {
       sample: formData.get("sample_select") || formData.get("sample"),
-      assembler: formData.get("assembler"),
+      analysis_profile: formData.get("analysis_profile") || "canonical-e1",
+      assembler: formData.get("assembler") || "velvet",
       kmer: formData.get("kmer"),
       skip_qc: formData.get("skip_qc") === "on",
-      host_filter_mode: formData.get("host_filter_mode") || "sus_scrofa",
+      host_filter_mode: formData.get("host_filter_mode") || "none",
     };
 
     if (params.host_filter_mode === "custom") {
@@ -1129,18 +1161,18 @@ const bindButtons = () => {
     });
   }
 
-  document.querySelectorAll(".tab").forEach((tab) => {
-    tab.addEventListener("click", () => {
-      document.querySelectorAll(".tab").forEach((item) => item.classList.remove("active"));
-      document.querySelectorAll(".tab-panel").forEach((panel) => panel.classList.remove("active"));
-      tab.classList.add("active");
-      document.getElementById(tab.dataset.tab).classList.add("active");
-      if (tab.dataset.tab === "tab-historico") fetchHistory();
-      if (tab.dataset.tab === "tab-analise-avancada") fetchSamples();
-      if (tab.dataset.tab === "tab-configuracao") {
-        loadEnvironmentStatus();
-        loadConfigEnv();
-      }
+  const dashboardTabs = Array.from(document.querySelectorAll(".tab"));
+  dashboardTabs.forEach((tab, index) => {
+    tab.addEventListener("click", () => activateDashboardTab(tab.dataset.tab));
+    tab.addEventListener("keydown", (event) => {
+      let nextIndex = null;
+      if (event.key === "ArrowRight") nextIndex = (index + 1) % dashboardTabs.length;
+      if (event.key === "ArrowLeft") nextIndex = (index - 1 + dashboardTabs.length) % dashboardTabs.length;
+      if (event.key === "Home") nextIndex = 0;
+      if (event.key === "End") nextIndex = dashboardTabs.length - 1;
+      if (nextIndex === null) return;
+      event.preventDefault();
+      activateDashboardTab(dashboardTabs[nextIndex].dataset.tab, { focus: true });
     });
   });
 
@@ -1266,9 +1298,15 @@ const renderEvidenceResult = (result) => {
     if (empty) {
       empty.hidden = false;
       const compatibility = result.compatibility || {};
+      const state = result.state || {};
       empty.textContent = [
         result.official_v1,
         result.experimental_warning,
+        !result.complete ? `Estado operacional: ${state.status || "incompleto"}.` : "",
+        !result.complete ? `Outcome cient\u00edfico: ${state.analysis_outcome || "NOT_EVALUABLE"}.` : "",
+        !result.complete && state.failure_type ? `Tipo de falha: ${state.failure_type}.` : "",
+        !result.complete && state.failed_stage ? `Etapa: ${state.failed_stage}.` : "",
+        !result.complete ? state.failure_message || "" : "",
         `${compatibility.status || "NOT_EVALUABLE"}: ${compatibility.message || "Reexecute a an\u00e1lise para gerar artefatos Alpha.2 completos."}`,
       ].filter(Boolean).join("\n");
     }
@@ -1276,7 +1314,19 @@ const renderEvidenceResult = (result) => {
   }
   if (!result.complete || !result.evidence_v2) {
     if (container) container.hidden = true;
-    if (empty) { empty.hidden = false; empty.textContent = "A execução não possui SUCCESS.json e não é considerada concluída."; }
+    if (empty) {
+      const state = result.state || {};
+      empty.hidden = false;
+      empty.textContent = [
+        `Estado operacional: ${state.status || "incompleto"}.`,
+        `Outcome científico: ${state.analysis_outcome || "NOT_EVALUABLE"}.`,
+        state.failure_type ? `Tipo de falha: ${state.failure_type}.` : "",
+        state.failed_stage ? `Etapa: ${state.failed_stage}.` : "",
+        state.failure_message || "",
+        "A execução não possui SUCCESS.json e nenhum artefato é apresentado como resultado concluído.",
+        result.experimental_warning || "",
+      ].filter(Boolean).join("\n");
+    }
     return;
   }
   if (empty) empty.hidden = true;
@@ -1290,23 +1340,40 @@ const renderEvidenceResult = (result) => {
       const card = document.createElement("article");
       card.className = "evidence-dimension-card";
       const title = document.createElement("strong"); title.textContent = sample.sample_id;
-      const body = document.createElement("p"); body.textContent = `${sample.analysis_outcome || "NOT_EVALUABLE"} · ${sample.evidence_level} · ${sample.specificity_status} · ${sample.coverage_status} · ${sample.control_status}`;
+      const body = document.createElement("p");
+      body.textContent = [
+        `execução=${sample.execution_status}`,
+        `outcome=${sample.analysis_outcome || "NOT_EVALUABLE"}`,
+        `evidência=${sample.evidence_level}`,
+        `conclusão=${sample.reported_conclusion}`,
+        `especificidade=${sample.specificity_status || "NOT_EVALUATED"}`,
+        `cobertura=${sample.coverage_status || "NOT_EVALUATED"}`,
+        `controle=${sample.control_status || "NOT_EVALUATED"}`,
+      ].join("\n");
       card.append(title, body); dimensions.append(card);
     });
   } else {
-    ["execution_status", "analysis_outcome", "evidence_level", "specificity_status", "coverage_status", "control_status"].forEach((key) => {
+    [
+      "execution_status", "analysis_outcome", "evidence_level",
+      "reported_conclusion", "shadow_mode", "specificity_status",
+      "coverage_status", "control_status",
+    ].forEach((key) => {
       const card = document.createElement("article"); card.className = "evidence-dimension-card";
       const title = document.createElement("strong"); title.textContent = key;
-      const state = document.createElement("p"); state.textContent = value[key] || "NOT_EVALUATED";
+      const state = document.createElement("p");
+      const canonicalValue = key === "shadow_mode" ? String(value[key]) : value[key];
+      state.textContent = canonicalValue || "NOT_EVALUATED";
       const explanation = document.createElement("small"); explanation.textContent = (result.explanations || {})[value[key]] || "Estado experimental rastreável no JSON.";
       card.append(title, state, explanation); dimensions.append(card);
     });
   }
-  getEl("evidence-summary").textContent = "Conclusão conservadora: evidência computacional experimental; requer revisão e validação complementar.";
   const summary = getEl("evidence-summary");
   if (summary) {
     const metrics = value.metrics || {};
-    const lines = [];
+    const lines = [
+      `Conclusão reportada pelo artefato canônico: ${value.reported_conclusion}.`,
+      "O dashboard apenas apresenta os campos canônicos e não recalcula o nível de evidência.",
+    ];
     if (Array.isArray(value.samples)) {
       value.samples.forEach((sample) => {
         const control = sample.control_metrics || {};
@@ -1324,14 +1391,51 @@ const renderEvidenceResult = (result) => {
       if (blocked.length) lines.push(`Gates bloqueados: ${blocked.map((gate) => gate.gate_id).join(", ")}`);
       (value.caveats || []).forEach((caveat) => lines.push(`Ressalva: ${caveat}`));
     }
-    lines.push("Conclusão conservadora: evidência computacional experimental; requer revisão e validação complementar.");
     summary.textContent = lines.join("\n");
   }
+  const candidates = getEl("evidence-candidates");
+  if (candidates) {
+    candidates.replaceChildren();
+    const canonicalCandidates = Array.isArray(value.candidates) ? value.candidates : [];
+    if (!canonicalCandidates.length) {
+      const message = document.createElement("p");
+      message.textContent = Array.isArray(value.samples)
+        ? "O resumo do lote não agrega candidatos entre amostras; consulte os artefatos canônicos de cada amostra."
+        : "Nenhum candidato computacional foi retido; isso não demonstra ausência viral.";
+      candidates.append(message);
+    } else {
+      canonicalCandidates.forEach((candidate) => {
+        const card = document.createElement("article");
+        card.className = `evidence-candidate-card${candidate.promotion_status === "BLOCKED" ? " evidence-candidate-card--blocked" : ""}`;
+        const title = document.createElement("strong");
+        title.textContent = `${candidate.reference_id} · ${candidate.candidate_class}`;
+        const body = document.createElement("p");
+        body.textContent = [
+          `locus=${candidate.locus_id}; orientação=${candidate.orientation}`,
+          `promoção=${candidate.promotion_status}`,
+          `bloqueios=${(candidate.blocking_reasons || []).join(", ") || "nenhum"}`,
+          `queries=${(candidate.query_ids || []).join(", ") || "nenhuma"}`,
+        ].join("\n");
+        card.append(title, body);
+        candidates.append(card);
+      });
+    }
+  }
   const artifacts = getEl("evidence-artifacts"); artifacts.replaceChildren();
+  const artifactLabels = {
+    sample_evidence: "Baixar evidência canônica da amostra (JSON)",
+    batch_evidence: "Baixar evidência canônica do lote (JSON)",
+    report: "Baixar relatório experimental",
+    batch_report: "Baixar relatório experimental do lote",
+    success: "Baixar marcador de commit",
+    state: "Baixar estado final",
+    provenance: "Baixar proveniência",
+  };
   (result.artifacts || []).forEach((type) => {
-    const link = document.createElement("a"); link.className = "btn btn--secondary"; link.textContent = type;
+    const link = document.createElement("a"); link.className = "btn btn--secondary"; link.textContent = artifactLabels[type] || `Baixar ${type}`;
     link.href = `/api/evidence/artifact?run=${encodeURIComponent(activeEvidenceRunId)}&type=${encodeURIComponent(type)}`;
-    link.target = "_blank"; link.rel = "noopener"; artifacts.append(link);
+    link.download = "";
+    artifacts.append(link);
   });
 };
 
@@ -1340,13 +1444,18 @@ const pollEvidenceRun = async () => {
   try {
     const state = await evidenceApi(`/api/evidence/run?id=${encodeURIComponent(activeEvidenceRunId)}`);
     renderEvidenceStages(state);
-    setEvidenceText("evidence-run-status", `${state.status} · run_id ${state.run_id}`, state.status.includes("fail") ? "error" : "");
+    const failureState = ["blocked", "failed", "cancelled", "alpha2_invalid", "legacy_incompatible"].includes(state.status);
+    setEvidenceText("evidence-run-status", `${state.status} · run_id ${state.run_id}`, failureState ? "error" : "");
     const terminal = ["done", "done_with_warning", "blocked", "failed", "cancelled"].includes(state.status);
     if (terminal) {
       clearTimeout(evidencePollTimer);
       getEl("evidence-cancel").disabled = true;
-      const result = await evidenceApi(`/api/evidence/result?run=${encodeURIComponent(activeEvidenceRunId)}`);
-      renderEvidenceResult(result);
+      try {
+        const result = await evidenceApi(`/api/evidence/result?run=${encodeURIComponent(activeEvidenceRunId)}`);
+        renderEvidenceResult(result);
+      } catch (error) {
+        setEvidenceText("evidence-run-status", `Execução terminal, mas o resultado não pôde ser carregado: ${error.message}`, "error");
+      }
       return;
     }
   } catch (error) {
@@ -1396,7 +1505,15 @@ const loadEvidenceInterface = async () => {
   try {
     const [samplesData, targetsData] = await Promise.all([evidenceApi("/api/samples"), evidenceApi("/api/targets")]);
     const sample = getEl("evidence-sample"); sample.replaceChildren(new Option("Selecione", "")); (samplesData.samples || []).forEach((item) => sample.add(new Option(item, item)));
-    const target = getEl("evidence-target"); target.replaceChildren(new Option("Configuração padrão", "")); (targetsData.targets || []).forEach((item) => target.add(new Option(item.display_name || item.label || item.name || item.key, item.key || item.id || item.name)));
+    const targetOptions = (targetsData.targets || []).map((item) => ({
+      label: item.display_name || item.label || item.name || item.key,
+      value: item.key || item.id || item.name,
+    }));
+    ["evidence-target", "evidence-batch-target"].forEach((id) => {
+      const target = getEl(id);
+      target.replaceChildren(new Option("Selecione explicitamente um banco viral", ""));
+      targetOptions.forEach((item) => target.add(new Option(item.label, item.value)));
+    });
     await loadEvidenceManifests();
     try {
       const dependencies = await evidenceApi("/api/evidence/dependencies");
@@ -1409,11 +1526,25 @@ const loadEvidenceInterface = async () => {
   } catch (error) { setEvidenceText("evidence-form-status", error.message, "error"); }
 };
 
+const updateEvidenceHostFilterFields = () => {
+  const custom = evidenceHostFilterModeEl?.value === "custom";
+  document.querySelectorAll("[data-evidence-host-custom]").forEach((item) => {
+    item.hidden = !custom;
+  });
+  const batchCustom = evidenceBatchHostFilterModeEl?.value === "custom";
+  document.querySelectorAll("[data-evidence-batch-host-custom]").forEach((item) => {
+    item.hidden = !batchCustom;
+  });
+};
+
 const bindEvidenceInterface = () => {
   document.querySelectorAll(".evidence-mode").forEach((button) => button.addEventListener("click", () => {
     document.querySelectorAll(".evidence-mode").forEach((item) => item.classList.remove("active")); button.classList.add("active");
     const advanced = button.dataset.mode === "advanced"; document.querySelectorAll(".evidence-advanced-only").forEach((item) => { item.hidden = !advanced; });
   }));
+  evidenceHostFilterModeEl?.addEventListener("change", updateEvidenceHostFilterFields);
+  evidenceBatchHostFilterModeEl?.addEventListener("change", updateEvidenceHostFilterFields);
+  updateEvidenceHostFilterFields();
   getEl("evidence-role")?.addEventListener("change", (event) => { const input = getEl("evidence-expected-target"); input.disabled = event.target.value !== "positive"; if (input.disabled) input.value = ""; });
   getEl("evidence-individual-form")?.addEventListener("submit", async (event) => {
     event.preventDefault(); if (event.target.querySelector('input[type="file"]')?.files.length) return;
@@ -1452,9 +1583,33 @@ const bindEvidenceInterface = () => {
   getEl("evidence-manifest-validate")?.addEventListener("click", async () => { try { const result = await evidenceApi("/api/evidence/manifests/validate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rows: evidenceBatchRows }) }); setEvidenceText("evidence-manifest-status", result.warnings.join(" ") || "Manifesto válido."); } catch (error) { setEvidenceText("evidence-manifest-status", error.message, "error"); } });
   getEl("evidence-manifest-save")?.addEventListener("click", async () => { try { const result = await evidenceApi("/api/evidence/manifests/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rows: evidenceBatchRows, manifest_id: getEl("evidence-manifest-id").value || null }) }); setEvidenceText("evidence-manifest-status", `Manifesto salvo: ${result.manifest_id}`); await loadEvidenceManifests(); } catch (error) { setEvidenceText("evidence-manifest-status", error.message, "error"); } });
   getEl("evidence-manifest-open")?.addEventListener("click", async () => { try { const id = getEl("evidence-manifest-list").value; const result = await evidenceApi(`/api/evidence/manifest?id=${encodeURIComponent(id)}`); evidenceBatchRows = result.rows; renderEvidenceBatchRows(); getEl("evidence-manifest-id").value = result.manifest_id; } catch (error) { setEvidenceText("evidence-manifest-status", error.message, "error"); } });
-  getEl("evidence-batch-run")?.addEventListener("click", async () => { try { const manifestId = getEl("evidence-manifest-list").value || getEl("evidence-manifest-id").value; if (!manifestId) throw new Error("Salve ou selecione um manifesto válido."); await startEvidenceRun("batch", { manifest_id: manifestId }); } catch (error) { setEvidenceText("evidence-manifest-status", error.message, "error"); } });
+  getEl("evidence-batch-run")?.addEventListener("click", async () => {
+    try {
+      const manifestId = getEl("evidence-manifest-list").value || getEl("evidence-manifest-id").value;
+      const target = getEl("evidence-batch-target").value;
+      if (!manifestId) throw new Error("Salve ou selecione um manifesto válido.");
+      if (!target) throw new Error("Selecione explicitamente um banco viral para o lote.");
+      await startEvidenceRun("batch", {
+        manifest_id: manifestId,
+        target,
+        host_filter_mode: evidenceBatchHostFilterModeEl?.value || "none",
+        host_name: getEl("evidence-batch-host-name").value,
+        host_index_prefix: getEl("evidence-batch-host-index-prefix").value,
+      });
+    } catch (error) { setEvidenceText("evidence-manifest-status", error.message, "error"); }
+  });
   getEl("evidence-config-validate")?.addEventListener("click", async () => { try { await evidenceApi("/api/evidence/config/validate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: getEl("evidence-config-editor").value }) }); setEvidenceText("evidence-config-status", "Configuração válida · parâmetros em calibração"); } catch (error) { setEvidenceText("evidence-config-status", error.message, "error"); } });
-  getEl("evidence-cancel")?.addEventListener("click", async () => { if (!activeEvidenceJobId) return; await evidenceApi(`/api/job/${activeEvidenceJobId}/cancel`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); setEvidenceText("evidence-run-status", "Cancelamento solicitado."); });
+  getEl("evidence-cancel")?.addEventListener("click", async () => {
+    if (!activeEvidenceJobId) return;
+    try {
+      await evidenceApi(`/api/job/${activeEvidenceJobId}/cancel`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      });
+      setEvidenceText("evidence-run-status", "Cancelamento solicitado.");
+    } catch (error) {
+      setEvidenceText("evidence-run-status", `Falha ao solicitar cancelamento: ${error.message}`, "error");
+    }
+  });
 };
 
 window.addEventListener("load", () => {
@@ -1467,4 +1622,5 @@ window.addEventListener("load", () => {
   setReportContent("");
   updateDBStatus();
   loadEvidenceInterface();
+  initializeGuidedDashboard();
 });

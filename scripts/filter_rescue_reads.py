@@ -2,11 +2,19 @@
 import sys
 import csv
 import argparse
+import hashlib
+import json
+import os
 from pathlib import Path
 
 # Adiciona o diretório lib ao path para importar logging_utils
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 from logging_utils import log_fatal, log_info, log_warning, set_context
+
+MIN_PID = 90.0
+MAX_EVALUE = 1e-5
+MIN_ALN_LEN = 80
+MIN_ALN_FRAC = 0.8
 
 
 def main():
@@ -54,11 +62,11 @@ def main():
                     # pident >= 90
                     # length >= 80 ou length >= 0.8 * qlen
                     # evalue <= 1e-5
-                    if pident < 90.0:
+                    if pident < MIN_PID:
                         continue
-                    if evalue > 1e-5:
+                    if evalue > MAX_EVALUE:
                         continue
-                    if length < 80 and length < (0.8 * qlen):
+                    if length < MIN_ALN_LEN and length < (MIN_ALN_FRAC * qlen):
                         continue
 
                     aln_cov = length / qlen if qlen > 0 else 0.0
@@ -88,15 +96,39 @@ def main():
 
     # Gravar saída
     try:
-        with out_path.open("w", encoding="utf-8", newline="") as out_fh:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = out_path.with_name(f".{out_path.name}.tmp.{os.getpid()}")
+        with temporary.open("w", encoding="utf-8", newline="") as out_fh:
             writer = csv.DictWriter(out_fh, delimiter="\t", fieldnames=fieldnames, lineterminator="\n")
             writer.writeheader()
             for hit in sorted(best_hits.values(), key=lambda h: -h["bitscore"]):
                 h_copy = dict(hit)
                 h_copy["evalue"] = f"{hit['evalue']:.2e}"
                 writer.writerow(h_copy)
+        os.replace(temporary, out_path)
     except Exception as exc:
         log_fatal(f"Erro ao gravar arquivo de candidatos resgatados {out_path}: {exc}", "Verifique as permissoes de escrita no diretorio results/blast/.")
+
+    provenance_path = out_path.with_suffix(out_path.suffix + ".provenance.json")
+    try:
+        provenance = {
+            "schema": "genein.rescue_filter_provenance.v1",
+            "input_raw_blast": str(raw_path),
+            "output_candidates": str(out_path),
+            "output_sha256": hashlib.sha256(out_path.read_bytes()).hexdigest(),
+            "criteria": {
+                "minimum_percent_identity": MIN_PID,
+                "maximum_evalue": MAX_EVALUE,
+                "minimum_alignment_length_bp": MIN_ALN_LEN,
+                "minimum_alignment_fraction_of_query": MIN_ALN_FRAC,
+            },
+            "candidate_count": len(best_hits),
+        }
+        temporary_json = provenance_path.with_name(f".{provenance_path.name}.tmp.{os.getpid()}")
+        temporary_json.write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(temporary_json, provenance_path)
+    except Exception as exc:
+        log_fatal(f"Erro ao gravar proveniencia do resgate {provenance_path}: {exc}", "Inspecione as permissoes do diretorio de resultados.")
 
     log_info(f"{len(best_hits)} leitura(s) candidatas resgatadas salvas com sucesso em {out_path}")
 

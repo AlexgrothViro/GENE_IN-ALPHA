@@ -7,9 +7,11 @@ from pathlib import Path
 
 try:
     from .common import as_float, as_int, load_yaml_config, read_tsv, write_json_atomic
+    from .activation_policy import conclusion_for, load_activation_policy
     from .evidence_contract import CONTROL_PASS, PIPELINE_VERSION, SCHEMA_VERSION, validate_document
 except ImportError:
     from common import as_float, as_int, load_yaml_config, read_tsv, write_json_atomic
+    from activation_policy import conclusion_for, load_activation_policy
     from evidence_contract import CONTROL_PASS, PIPELINE_VERSION, SCHEMA_VERSION, validate_document
 
 
@@ -69,11 +71,22 @@ def _candidate_key(locus: dict) -> tuple[str, str, str]:
 def classify(sample: str, loci: list[dict[str, str]], competitive: list[dict[str, str]],
              read_support: list[dict[str, str]], coverage: list[dict[str, str]],
              control_status: str, library_mode: str, config: dict, shadow: bool = True,
-             provenance: dict | None = None, run_id: str | None = None) -> dict:
-    if shadow is not True:
-        raise ValueError("shadow_mode activation is locked until benchmark approval")
+             provenance: dict | None = None, run_id: str | None = None,
+             policy: dict | None = None,
+             assembly_concordance: dict | None = None) -> dict:
+    if not isinstance(shadow, bool):
+        raise ValueError("shadow_mode must be boolean")
+    active_policy = policy
+    if shadow is False:
+        active_policy = active_policy or load_activation_policy()
+        if active_policy["shadow_mode"] is not False:
+            raise ValueError("active classification requires an active policy record")
 
     provenance = provenance or {}
+    assembly_concordance = assembly_concordance or {}
+    assembly_by_locus = assembly_concordance.get("by_locus", {})
+    if not isinstance(assembly_by_locus, dict):
+        raise ValueError("assembly concordance by_locus must be an object")
     locus_cfg = _section(config, "locus")
     support_cfg = _section(config, "support")
     evidence_cfg = _section(config, "sample_evidence")
@@ -107,11 +120,22 @@ def classify(sample: str, loci: list[dict[str, str]], competitive: list[dict[str
         key = _candidate_key(locus)
         support = support_by_key.get(key)
         covered = coverage_by_key.get(key)
+        aligned_query_bp = as_int(locus.get("max_query_covered_bp"))
         query_length = as_int(locus.get("max_query_length"))
-        # Older canonical locus tables did not carry max_query_length.  In
-        # that case the nonredundant reference span is the only validated
-        # length available for applying the same minimum-candidate policy.
-        candidate_bp = query_length or as_int(locus.get("covered_reference_bp"))
+        # Apply the existing candidate-length policy to the query span that
+        # actually aligned. Older canonical tables fall back to query length,
+        # then to the nonredundant reference span for compatibility.
+        candidate_bp = (
+            aligned_query_bp
+            or query_length
+            or as_int(locus.get("covered_reference_bp"))
+        )
+        assembly_key = "|".join(key)
+        assembly_support = assembly_by_locus.get(assembly_key, {
+            "supporting_assemblers": [],
+            "support_count": 0,
+            "status": "NOT_EVALUATED",
+        })
         evaluated_candidates.append({
             "candidate_id": locus.get("locus_id") or f"{key[0]}:{locus.get('reference_start', '')}-{locus.get('reference_end', '')}",
             "reference_id": key[0],
@@ -137,6 +161,7 @@ def classify(sample: str, loci: list[dict[str, str]], competitive: list[dict[str
                 "median_depth_covered": as_float(covered.get("median_depth_covered")) if covered else 0.0,
                 "max_window_depth_fraction": as_float(covered.get("max_window_depth_fraction")) if covered else 0.0,
             },
+            "assembly_support": assembly_support,
         })
 
     if all_specificity and all(item == "TARGET_SPECIFIC" for item in all_specificity):
@@ -167,13 +192,34 @@ def classify(sample: str, loci: list[dict[str, str]], competitive: list[dict[str
                 return False
         return True
 
+    minimum_candidate_bp = as_int(locus_cfg["minimum_candidate_bp"])
+    for candidate in evaluated_candidates:
+        blocking_reasons = []
+        if candidate["candidate_bp"] < minimum_candidate_bp:
+            blocking_reasons.append("BELOW_MINIMUM_CANDIDATE_BP")
+        if not is_specific(candidate):
+            blocking_reasons.append("SPECIFICITY_NOT_PASSED")
+        if not support_passes(candidate):
+            blocking_reasons.append("SUPPORT_NOT_PASSED")
+        candidate["candidate_class"] = (
+            "EXPLORATORY_FRAGMENT"
+            if candidate["candidate_bp"] < minimum_candidate_bp
+            else "LOCUS_CANDIDATE"
+        )
+        candidate["promotion_status"] = "BLOCKED" if blocking_reasons else "ELIGIBLE"
+        candidate["blocking_reasons"] = blocking_reasons
+
+    # A recovered computational candidate remains visible even when a later
+    # gate blocks promotion. This keeps exploratory fragments and unavailable
+    # support auditable without changing the configured scientific thresholds.
+    candidates = evaluated_candidates
     locus_eligible = [
-        item for item in evaluated_candidates
-        if is_specific(item) and item["candidate_bp"] >= as_int(locus_cfg["minimum_candidate_bp"])
+        item for item in candidates
+        if is_specific(item) and item["candidate_bp"] >= minimum_candidate_bp
     ]
-    candidates = [item for item in locus_eligible if support_passes(item)]
+    promotion_eligible = [item for item in locus_eligible if support_passes(item)]
     aggregate_candidates_by_interval = {}
-    for candidate in candidates:
+    for candidate in promotion_eligible:
         interval_key = (
             candidate["reference_id"],
             candidate["segment"],
@@ -182,8 +228,11 @@ def classify(sample: str, loci: list[dict[str, str]], competitive: list[dict[str
         )
         aggregate_candidates_by_interval.setdefault(interval_key, candidate)
     aggregate_candidates = list(aggregate_candidates_by_interval.values())
-    matched_support = [item["support"] for item in candidates]
-    matched_coverage = [item["coverage"] for item in candidates if item["coverage"]["status"] == "AVAILABLE"]
+    matched_support = [item["support"] for item in promotion_eligible]
+    matched_coverage = [
+        item["coverage"] for item in promotion_eligible
+        if item["coverage"]["status"] == "AVAILABLE"
+    ]
     coverage_passes = [
         item for item in matched_coverage
         if item["breadth_1x"] >= as_float(evidence_cfg["genome_breadth_1x"])
@@ -194,7 +243,7 @@ def classify(sample: str, loci: list[dict[str, str]], competitive: list[dict[str
     elif matched_coverage:
         coverage_status = "COVERAGE_AVAILABLE" if coverage_passes else "INSUFFICIENT_COVERAGE"
     elif locus_eligible:
-        coverage_status = "INSUFFICIENT_SUPPORT" if not candidates else "COVERAGE_UNAVAILABLE"
+        coverage_status = "INSUFFICIENT_SUPPORT" if not promotion_eligible else "COVERAGE_UNAVAILABLE"
     else:
         coverage_status = "COVERAGE_UNAVAILABLE"
     multi_locus_passes = (
@@ -203,15 +252,34 @@ def classify(sample: str, loci: list[dict[str, str]], competitive: list[dict[str
     )
     analysis_outcome = "EVIDENCE_RECOVERED" if candidates else "NO_EVIDENCE_RECOVERED"
     caveats = [
-        "Evidence 2.0 alpha.2 opera em shadow mode; E2 e E3 permanecem estruturalmente bloqueados.",
+        (
+            "Evidence 2.0 opera em shadow mode; E2 e E3 permanecem estruturalmente bloqueados."
+            if shadow
+            else "Evidence 2.0 opera oficialmente com teto E1; E2 e E3 permanecem estruturalmente bloqueados."
+        ),
         "E1 autoriza relatar apenas evidência computacional exploratória, não presença ou identidade viral.",
         *support_caveats,
         *coverage_caveats,
     ]
     if not candidates:
         caveats.append("Nenhuma evidência recuperada sob os limiares configurados; isso não demonstra ausência viral.")
+    if candidates and not promotion_eligible:
+        caveats.append(
+            "Foram recuperados candidatos computacionais, mas nenhum atende todos os gates "
+            "de comprimento, especificidade e suporte para promoção."
+        )
+    if any(item["candidate_class"] == "EXPLORATORY_FRAGMENT" for item in candidates):
+        caveats.append(
+            "Fragmentos abaixo de locus.minimum_candidate_bp permanecem exploratórios e "
+            "nunca promovem conclusão isoladamente."
+        )
     if control_status not in CONTROL_PASS:
         caveats.append(f"Controles não autorizam promoção: {control_status}.")
+    if assembly_concordance:
+        caveats.append(
+            "Concordância entre montadores é observação de robustez e nunca promove "
+            "candidato ou nível de evidência isoladamente."
+        )
 
     gates = [
         {
@@ -256,13 +324,19 @@ def classify(sample: str, loci: list[dict[str, str]], competitive: list[dict[str
             "reason": control_status,
         },
         {
-            "gate_id": "alpha_shadow_ceiling", "status": "BLOCKED",
-            "reason": "A política alpha.2 mantém o teto em E1 até benchmark aprovado.",
+            "gate_id": "alpha_shadow_ceiling" if shadow else "evidence_ceiling",
+            "status": "BLOCKED",
+            "reason": (
+                "Shadow mode limita a saída a E1."
+                if shadow
+                else "A política E1 ativa bloqueia estruturalmente E2, E3 e E4."
+            ),
         },
     ]
 
     metrics = {
-        "candidate_count": len(aggregate_candidates),
+        "candidate_count": len(candidates),
+        "promotion_eligible_candidate_count": len(aggregate_candidates),
         "qualifying_loci": len(aggregate_candidates),
         "total_nonredundant_reference_bp": sum(item["covered_reference_bp"] for item in aggregate_candidates),
         "unique_templates": max((item["unique_templates"] for item in matched_support), default=0),
@@ -272,6 +346,9 @@ def classify(sample: str, loci: list[dict[str, str]], competitive: list[dict[str
         "breadth_3x": max((item["breadth_3x"] for item in matched_coverage), default=0.0),
         "median_depth_covered": max((item["median_depth_covered"] for item in matched_coverage), default=0.0),
         "max_window_depth_fraction": max((item["max_window_depth_fraction"] for item in matched_coverage), default=0.0),
+        "multi_assembler_locus_count": as_int(
+            assembly_concordance.get("multi_assembler_locus_count")
+        ),
     }
 
     document = {
@@ -282,13 +359,23 @@ def classify(sample: str, loci: list[dict[str, str]], competitive: list[dict[str
         "execution_status": "done",
         "analysis_outcome": analysis_outcome,
         "evidence_level": "E1",
-        "shadow_mode": True,
-        "reported_conclusion": "SHADOW_ONLY",
+        "shadow_mode": shadow,
+        "reported_conclusion": (
+            "SHADOW_ONLY"
+            if shadow
+            else conclusion_for(active_policy, analysis_outcome)
+        ),
         "candidates": candidates,
         "caveats": list(dict.fromkeys(caveats)),
         "promotion_gates": gates,
         "specificity": {"status": specificity_status},
-        "coverage": {"status": coverage_status, "by_candidate": [item["coverage"] | {"candidate_id": item["candidate_id"]} for item in candidates]},
+        "coverage": {
+            "status": coverage_status,
+            "by_candidate": [
+                item["coverage"] | {"candidate_id": item["candidate_id"]}
+                for item in candidates
+            ],
+        },
         "controls": {"status": control_status, "metrics": {}},
         "provenance": provenance,
         "library_mode": library_mode,
@@ -298,6 +385,22 @@ def classify(sample: str, loci: list[dict[str, str]], competitive: list[dict[str
         "coverage_status": coverage_status,
         "control_status": control_status,
     }
+    if assembly_concordance:
+        document["analysis_observations"] = {
+            "assembly_concordance": {
+                "status": "AVAILABLE",
+                "evidence_authority": "CORROBORATION_ONLY",
+                "multi_assembler_locus_count": as_int(
+                    assembly_concordance.get("multi_assembler_locus_count")
+                ),
+            }
+        }
+    if not shadow:
+        document.update({
+            "policy_version": active_policy["policy_version"],
+            "activation_record_id": active_policy["activation_record_id"],
+            "evidence_ceiling": active_policy["evidence_ceiling"],
+        })
     return validate_document(document)
 
 
@@ -314,19 +417,25 @@ def main() -> None:
     parser.add_argument("--out", required=True)
     parser.add_argument("--provenance")
     parser.add_argument("--run-id")
-    parser.add_argument("--activate", action="store_true", help="reserved for post-benchmark activation")
+    parser.add_argument("--activation-policy")
+    parser.add_argument("--assembly-concordance")
+    parser.add_argument("--activate", action="store_true", help="deprecated; active E1 is policy-controlled")
     args = parser.parse_args()
-    if args.activate:
-        parser.error("evidence activation is locked until the benchmark is completed")
     read_support = read_tsv(args.read_support) if args.read_support and Path(args.read_support).stat().st_size else []
     coverage = read_tsv(args.coverage) if args.coverage and Path(args.coverage).stat().st_size else []
     provenance = {}
     if args.provenance:
         with open(args.provenance, "r", encoding="utf-8", errors="strict") as handle:
             provenance = json.load(handle)
+    policy = load_activation_policy(args.activation_policy)
+    assembly_concordance = {}
+    if args.assembly_concordance:
+        with open(args.assembly_concordance, "r", encoding="utf-8", errors="strict") as handle:
+            assembly_concordance = json.load(handle)
     result = classify(
         args.sample, read_tsv(args.loci), read_tsv(args.competitive), read_support, coverage,
-        args.control_status, args.library_mode, load_yaml_config(args.config), True, provenance, args.run_id,
+        args.control_status, args.library_mode, load_yaml_config(args.config),
+        policy["shadow_mode"], provenance, args.run_id, policy, assembly_concordance,
     )
     write_json_atomic(args.out, result)
 

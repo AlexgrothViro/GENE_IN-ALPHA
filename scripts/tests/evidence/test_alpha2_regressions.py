@@ -11,7 +11,10 @@ from blast_router import profiles_for_length
 from classify_sample import classify
 from common import build_artifact_manifest, read_tsv, validate_artifact_manifest, write_json_atomic
 from evaluate_controls import evaluate
-from evidence_contract import not_evaluable_document, validate_document
+from evidence_contract import (
+    not_evaluable_document, promote_for_public_output, validate_document,
+)
+from finalize_batch import validate_batch_evidence
 from phylogeny_gate import candidate_scoped_information
 from summarize_read_support import summarize_sam
 
@@ -87,6 +90,63 @@ class Alpha2RegressionTests(unittest.TestCase):
         self.assertEqual(value["analysis_outcome"], "NOT_EVALUABLE")
         self.assertEqual(value["evidence_level"], "NOT_EVALUABLE")
         self.assertEqual(value["execution_status"], "failed")
+
+    def test_failed_execution_cannot_masquerade_as_no_evidence(self):
+        value = classify("sample", [], [], [], [], "UNCONTROLLED", "unknown", {})
+        value["execution_status"] = "failed"
+        with self.assertRaisesRegex(ValueError, "requires NOT_EVALUABLE"):
+            validate_document(value)
+
+    def test_nonterminal_execution_cannot_be_promoted_as_evidence(self):
+        value = classify("sample", [], [], [], [], "UNCONTROLLED", "unknown", {})
+        value["execution_status"] = "running"
+        with self.assertRaisesRegex(ValueError, "terminal execution_status"):
+            validate_document(value)
+
+    def test_e4_is_never_a_software_output(self):
+        value = classify("sample", [], [], [], [], "UNCONTROLLED", "unknown", {})
+        value["evidence_level"] = "E4"
+        with self.assertRaisesRegex(ValueError, "invalid evidence_level"):
+            validate_document(value)
+
+    def test_batch_output_requires_shadow_only_conclusion(self):
+        sample = classify("sample", [], [], [], [], "UNCONTROLLED", "unknown", {})
+        batch_sample = {
+            key: sample[key]
+            for key in (
+                "sample_id", "execution_status", "analysis_outcome",
+                "evidence_level", "reported_conclusion", "caveats",
+                "promotion_gates",
+            )
+        }
+        batch = {
+            "schema_version": "2.0",
+            "pipeline_version": "2.0.0-alpha.2",
+            "run_id": "batch-run",
+            "batch_id": "batch",
+            "shadow_mode": True,
+            "reported_conclusion": "SHADOW_ONLY",
+            "samples": [batch_sample],
+        }
+        self.assertEqual(
+            promote_for_public_output(batch)["reported_conclusion"],
+            "SHADOW_ONLY",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "batch_evidence.json"
+            path.write_text(json.dumps(batch), encoding="utf-8")
+            self.assertEqual(
+                validate_batch_evidence(path, "batch-run")["run_id"],
+                "batch-run",
+            )
+            batch["samples"][0]["execution_status"] = "failed"
+            path.write_text(json.dumps(batch), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "requires NOT_EVALUABLE"):
+                validate_batch_evidence(path, "batch-run")
+            batch["samples"][0]["execution_status"] = "done"
+        batch.pop("reported_conclusion")
+        with self.assertRaisesRegex(ValueError, "reported_conclusion"):
+            promote_for_public_output(batch)
 
     def test_custom_evidence_root_reaches_all_child_runs(self):
         main = (ROOT / "scripts" / "20_run_pipeline.sh").read_text(encoding="utf-8")

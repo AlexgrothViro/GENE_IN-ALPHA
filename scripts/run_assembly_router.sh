@@ -3,170 +3,185 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
-
 CONFIG_FILE="${REPO_ROOT}/config/picornavirus.env"
 LEGACY_CONFIG="${REPO_ROOT}/config.env"
 
-# Se este script foi chamado pelo pipeline principal,
-# não recarregar config.env para não sobrescrever argumentos da CLI.
+# The main pipeline has already resolved CLI/config precedence.
 if [[ "${PIPELINE_CONFIG_LOADED:-0}" != "1" ]]; then
-  if [[ -f "${CONFIG_FILE}" ]]; then
-    source "${CONFIG_FILE}"
-  elif [[ -f "${LEGACY_CONFIG}" ]]; then
-    source "${LEGACY_CONFIG}"
+  if [[ -f "$CONFIG_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$CONFIG_FILE"
+  elif [[ -f "$LEGACY_CONFIG" ]]; then
+    # shellcheck disable=SC1090
+    source "$LEGACY_CONFIG"
   fi
 fi
 
+# shellcheck disable=SC1091
 source "${SCRIPT_DIR}/lib/common.sh"
+# Assembler failures are classified below and may trigger a fallback.
 set +e
-
-if [[ "${PIPELINE_CONFIG_LOADED:-0}" != "1" ]]; then
-  if [[ ! -f "${CONFIG_FILE}" && ! -f "${LEGACY_CONFIG}" ]]; then
-    log_error "config/picornavirus.env não existe. Crie com: cp config/picornavirus.env.example config/picornavirus.env"
-  fi
-fi
 
 RAW_DIR="$(resolve_path "${RAW_DIR:-data/raw}")"
 ASSEMBLY_DIR="$(resolve_path "${ASSEMBLY_DIR:-data/assemblies}")"
-
-SAMPLE_NAME="${SAMPLE_NAME:-${SAMPLE:-amostra_teste}}"
+SAMPLE_NAME="${SAMPLE_NAME:-${SAMPLE:-}}"
+if [[ -z "$SAMPLE_NAME" ]]; then
+  log_error "Informe SAMPLE_NAME ou SAMPLE explicitamente."
+fi
+SAMPLE_NAME="$(python3 "${SCRIPT_DIR}/lib/input_validation.py" sample "$SAMPLE_NAME")" || exit 2
 SAMPLE_ID="${SAMPLE_ID:-$SAMPLE_NAME}"
-SAMPLE_KEY="$SAMPLE_ID"
-
-# Sanitiza espaços do SAMPLE_KEY para uso em paths de diretório de montagem
-# (SPAdes 4.x falha com espaços nos caminhos dos configs internos)
-SAFE_SAMPLE_KEY="${SAMPLE_KEY// /_}"
+SAMPLE_KEY="$(python3 "${SCRIPT_DIR}/lib/input_validation.py" sample "$SAMPLE_ID")" || exit 2
+SAFE_SAMPLE_KEY="$SAMPLE_KEY"
 
 ASSEMBLER="${ASSEMBLER:-velvet}"
+ASSEMBLER="${ASSEMBLER,,}"
+ANALYSIS_PROFILE="${ANALYSIS_PROFILE:-canonical-e1}"
+ANALYSIS_PROFILES_CONFIG="${ANALYSIS_PROFILES_CONFIG:-${REPO_ROOT}/config/analysis_profiles.json}"
 THREADS="${THREADS:-4}"
 SPADES_PARAMS="${SPADES_PARAMS:-}"
 VELVET_K="${VELVET_K:-31}"
 
-USE_SINGLE=0
-RAW_SINGLE=""
+python3 "${SCRIPT_DIR}/analysis_profiles.py" \
+  --config "$ANALYSIS_PROFILES_CONFIG" --profile "$ANALYSIS_PROFILE" >/dev/null || exit 2
+PROFILE_STRATEGY="$(
+  python3 "${SCRIPT_DIR}/analysis_profiles.py" \
+    --config "$ANALYSIS_PROFILES_CONFIG" --profile "$ANALYSIS_PROFILE" --field strategy
+)" || exit 2
+PROFILE_MINIMUM_SUCCESSFUL="$(
+  python3 "${SCRIPT_DIR}/analysis_profiles.py" \
+    --config "$ANALYSIS_PROFILES_CONFIG" --profile "$ANALYSIS_PROFILE" \
+    --field minimum_successful_assemblers
+)" || exit 2
+if [[ "$PROFILE_STRATEGY" == "consensus" ]]; then
+  ASSEMBLER="consensus"
+fi
+case "$ASSEMBLER" in
+  velvet|spades|metaspades|consensus) ;;
+  *) log_error "Montador invalido: '$ASSEMBLER'. Use velvet, spades, metaspades ou o perfil assembly-consensus." ;;
+esac
+if ! [[ "$THREADS" =~ ^[1-9][0-9]*$ ]]; then
+  log_error "THREADS deve ser um inteiro positivo: '$THREADS'."
+fi
+if ! [[ "$VELVET_K" =~ ^[0-9]+$ ]] || (( VELVET_K < 15 || VELVET_K > 127 || VELVET_K % 2 == 0 )); then
+  log_error "VELVET_K deve ser impar e estar entre 15 e 127: '$VELVET_K'."
+fi
 
-if [[ -n "${SAMPLE_SINGLE:-}" ]]; then
-  USE_SINGLE=1
-  RAW_SINGLE="$(resolve_path "${SAMPLE_SINGLE}")"
-  check_file "$RAW_SINGLE"
+RAW_SINGLE=""
+RAW1=""
+RAW2=""
+if [[ -n "${SAMPLE_SINGLE:-}" && ( -n "${SAMPLE_R1:-}" || -n "${SAMPLE_R2:-}" ) ]]; then
+  log_error "Use SAMPLE_SINGLE ou SAMPLE_R1/SAMPLE_R2, nunca os dois modos."
+elif [[ -n "${SAMPLE_SINGLE:-}" ]]; then
+  RAW_SINGLE="$(resolve_path "$SAMPLE_SINGLE")"
+  python3 "${SCRIPT_DIR}/lib/input_validation.py" fastq "$RAW_SINGLE" >/dev/null || exit 2
 else
-  if [[ -n "${SAMPLE_R1:-}" ]]; then
-    RAW1="$(resolve_path "${SAMPLE_R1}")"
+  if [[ -n "${SAMPLE_R1:-}" || -n "${SAMPLE_R2:-}" ]]; then
+    [[ -n "${SAMPLE_R1:-}" && -n "${SAMPLE_R2:-}" ]] || \
+      log_error "SAMPLE_R1 e SAMPLE_R2 devem ser informados juntos."
+    RAW1="$(resolve_path "$SAMPLE_R1")"
+    RAW2="$(resolve_path "$SAMPLE_R2")"
   else
     RAW1="${RAW_DIR}/${SAMPLE_KEY}_R1.fastq.gz"
-  fi
-
-  if [[ -n "${SAMPLE_R2:-}" ]]; then
-    RAW2="$(resolve_path "${SAMPLE_R2}")"
-  else
     RAW2="${RAW_DIR}/${SAMPLE_KEY}_R2.fastq.gz"
   fi
-
-  check_file "$RAW1"
-  check_file "$RAW2"
+  python3 "${SCRIPT_DIR}/lib/input_validation.py" fastq "$RAW1" --mate "$RAW2" >/dev/null || exit 2
 fi
 
 log_info "[PIPELINE] Sample: $SAMPLE_NAME"
-log_info "[PIPELINE] Sample key: $SAMPLE_KEY  (safe: $SAFE_SAMPLE_KEY)"
+log_info "[PIPELINE] Sample key: $SAMPLE_KEY"
+log_info "[PIPELINE] Analysis profile: $ANALYSIS_PROFILE"
 log_info "[PIPELINE] Assembler: $ASSEMBLER"
-if [[ $USE_SINGLE -eq 1 ]]; then
+if [[ -n "$RAW_SINGLE" ]]; then
   log_info "[PIPELINE] Input single-end: $RAW_SINGLE"
 else
   log_info "[PIPELINE] Input paired-end: $RAW1 / $RAW2"
 fi
 
-# Diretório padronizado de saída (usa nome original do sample para compatibilidade)
 STD_ASM_DIR="${ASSEMBLY_DIR}/${SAMPLE_KEY}_assembly"
 mkdir -p "$STD_ASM_DIR"
-
 export PIPELINE_ETAPA="ASSEMBLY"
 
-STD_ASM_DIR="${ASSEMBLY_DIR}/${SAMPLE_KEY}_assembly"
-mkdir -p "$STD_ASM_DIR"
-
-copy_contigs() {
-  local src="$1" dst="$2"
-  if [[ ! -f "$src" ]]; then
-    log_error "Contigs não encontrados em: $src"
-  fi
-  rm -f "$dst"
-  cp -f "$src" "$dst"
-  log_info "[PIPELINE] Contigs copiados com sucesso: $src → $dst"
-}
-
-# Variáveis globais para armazenar os caminhos
 LAST_CONTIGS_SRC=""
+LAST_MAX_CONTIG_LEN=0
 
 run_single_assembler() {
   local asm="$1"
   local rc=0
+  local contigs_src=""
   local asm_log_dir="${REPO_ROOT}/logs/assembly"
   local stdout_log="${asm_log_dir}/${SAFE_SAMPLE_KEY}_${asm}.stdout.log"
   local stderr_log="${asm_log_dir}/${SAFE_SAMPLE_KEY}_${asm}.stderr.log"
   mkdir -p "$asm_log_dir"
-  rm -f "$stdout_log" "$stderr_log"
+  : > "$stdout_log"
+  : > "$stderr_log"
+  LAST_CONTIGS_SRC=""
+  LAST_MAX_CONTIG_LEN=0
 
   log_info "Tentando montar com: $asm"
-
-  if [[ "$asm" == "metaspades" ]]; then
-    rm -rf "${ASSEMBLY_DIR}/${SAFE_SAMPLE_KEY}_metaspades"
-    if [[ $USE_SINGLE -eq 1 ]]; then
-      SAMPLE_SINGLE="$RAW_SINGLE" \
-        "${SCRIPT_DIR}/01_run_metaspades.sh" "$SAFE_SAMPLE_KEY" "$THREADS" "$SPADES_PARAMS" > "$stdout_log" 2> "$stderr_log"
-    else
-      R1="$RAW1" R2="$RAW2" \
-        "${SCRIPT_DIR}/01_run_metaspades.sh" "$SAFE_SAMPLE_KEY" "$THREADS" "$SPADES_PARAMS" > "$stdout_log" 2> "$stderr_log"
-    fi
-    rc=$?
-    local contigs_src="${ASSEMBLY_DIR}/${SAFE_SAMPLE_KEY}_metaspades/contigs.fasta"
-
-  elif [[ "$asm" == "spades" ]]; then
-    rm -rf "${ASSEMBLY_DIR}/${SAFE_SAMPLE_KEY}_spades"
-    if [[ $USE_SINGLE -eq 1 ]]; then
-      SAMPLE_SINGLE="$RAW_SINGLE" \
-        "${SCRIPT_DIR}/01_run_spades.sh" "$SAFE_SAMPLE_KEY" "$THREADS" "$SPADES_PARAMS" "spades" > "$stdout_log" 2> "$stderr_log"
-    else
-      R1="$RAW1" R2="$RAW2" \
-        "${SCRIPT_DIR}/01_run_spades.sh" "$SAFE_SAMPLE_KEY" "$THREADS" "$SPADES_PARAMS" "spades" > "$stdout_log" 2> "$stderr_log"
-    fi
-    rc=$?
-    local contigs_src="${ASSEMBLY_DIR}/${SAFE_SAMPLE_KEY}_spades/contigs.fasta"
-
-  elif [[ "$asm" == "velvet" ]]; then
-    rm -rf "${ASSEMBLY_DIR}/${SAFE_SAMPLE_KEY}_velvet_k${VELVET_K}"
-    if [[ $USE_SINGLE -eq 1 ]]; then
-      SAMPLE_SINGLE="$RAW_SINGLE" \
-        "${SCRIPT_DIR}/01_run_velvet.sh" "$SAFE_SAMPLE_KEY" "$VELVET_K" "${VELVET_OPTS:-}" > "$stdout_log" 2> "$stderr_log"
-    else
-      R1="$RAW1" R2="$RAW2" \
-        "${SCRIPT_DIR}/01_run_velvet.sh" "$SAFE_SAMPLE_KEY" "$VELVET_K" "${VELVET_OPTS:-}" > "$stdout_log" 2> "$stderr_log"
-    fi
-    rc=$?
-    local contigs_src="${ASSEMBLY_DIR}/${SAFE_SAMPLE_KEY}_velvet_k${VELVET_K}/contigs.fa"
-  fi
+  case "$asm" in
+    metaspades)
+      contigs_src="${ASSEMBLY_DIR}/${SAFE_SAMPLE_KEY}_metaspades/contigs.fasta"
+      if [[ -n "$RAW_SINGLE" ]]; then
+        log_warning "metaSPAdes requer biblioteca curta paired-end; tentativa single-end recusada."
+        return 1
+      fi
+      R1="$RAW1" R2="$RAW2" ASSEMBLY_DIR="$ASSEMBLY_DIR" \
+        "${SCRIPT_DIR}/01_run_metaspades.sh" "$SAFE_SAMPLE_KEY" "$THREADS" "$SPADES_PARAMS" \
+        > "$stdout_log" 2> "$stderr_log"
+      rc=$?
+      ;;
+    spades)
+      contigs_src="${ASSEMBLY_DIR}/${SAFE_SAMPLE_KEY}_spades/contigs.fasta"
+      if [[ -n "$RAW_SINGLE" ]]; then
+        SAMPLE_SINGLE="$RAW_SINGLE" ASSEMBLY_DIR="$ASSEMBLY_DIR" \
+          "${SCRIPT_DIR}/01_run_spades.sh" "$SAFE_SAMPLE_KEY" "$THREADS" "$SPADES_PARAMS" "spades" \
+          > "$stdout_log" 2> "$stderr_log"
+      else
+        R1="$RAW1" R2="$RAW2" ASSEMBLY_DIR="$ASSEMBLY_DIR" \
+          "${SCRIPT_DIR}/01_run_spades.sh" "$SAFE_SAMPLE_KEY" "$THREADS" "$SPADES_PARAMS" "spades" \
+          > "$stdout_log" 2> "$stderr_log"
+      fi
+      rc=$?
+      ;;
+    velvet)
+      contigs_src="${ASSEMBLY_DIR}/${SAFE_SAMPLE_KEY}_velvet_k${VELVET_K}/contigs.fa"
+      if [[ -n "$RAW_SINGLE" ]]; then
+        SAMPLE_SINGLE="$RAW_SINGLE" ASSEMBLY_DIR="$ASSEMBLY_DIR" \
+          "${SCRIPT_DIR}/01_run_velvet.sh" "$SAFE_SAMPLE_KEY" "$VELVET_K" "${VELVET_OPTS:-}" \
+          > "$stdout_log" 2> "$stderr_log"
+      else
+        R1="$RAW1" R2="$RAW2" ASSEMBLY_DIR="$ASSEMBLY_DIR" \
+          "${SCRIPT_DIR}/01_run_velvet.sh" "$SAFE_SAMPLE_KEY" "$VELVET_K" "${VELVET_OPTS:-}" \
+          > "$stdout_log" 2> "$stderr_log"
+      fi
+      rc=$?
+      ;;
+  esac
 
   if [[ $rc -ne 0 ]]; then
-    log_warning "Montador $asm falhou com exit code: $rc (Falha Dura). Logs: stdout=${stdout_log}; stderr=${stderr_log}"
-    return 1 # Falha dura
+    log_warning "Montador $asm falhou com exit code $rc (falha dura). Logs: stdout=${stdout_log}; stderr=${stderr_log}"
+    return 1
   fi
-
   if [[ ! -s "$contigs_src" ]]; then
-    log_warning "Montador $asm nao gerou contigs ou arquivo esta vazio (Falha Branda)"
-    return 2 # Falha branda
+    log_warning "Montador $asm nao gerou contigs (falha branda)."
+    return 2
+  fi
+  if ! python3 "${SCRIPT_DIR}/lib/input_validation.py" fasta "$contigs_src" >/dev/null; then
+    log_warning "Montador $asm gerou FASTA invalido (falha dura): $contigs_src"
+    return 1
   fi
 
-  # Calcula tamanho do maior contig
-  local max_contig_len=0
-  max_contig_len=$(awk '/^>/ {if (seqlen > max) max = seqlen; seqlen = 0; next} {seqlen += length($0)} END {if (seqlen > max) max = seqlen; print max}' "$contigs_src" 2>/dev/null || echo 0)
-  max_contig_len=${max_contig_len:-0}
-
-  if [[ $max_contig_len -lt 200 ]]; then
-    log_warning "Maior contig gerado por $asm (${max_contig_len} pb) menor que 200 pb (Falha Branda)"
-    return 2 # Falha branda
-  fi
-
-  log_info "Montador $asm concluido com sucesso. Maior contig: ${max_contig_len} pb."
   LAST_CONTIGS_SRC="$contigs_src"
+  LAST_MAX_CONTIG_LEN="$(
+    awk '/^>/ {if (seqlen > max) max = seqlen; seqlen = 0; next}
+         {seqlen += length($0)}
+         END {if (seqlen > max) max = seqlen; print (max + 0)}' "$contigs_src"
+  )"
+  if (( LAST_MAX_CONTIG_LEN < 200 )); then
+    log_warning "Maior contig gerado por $asm (${LAST_MAX_CONTIG_LEN} bp) menor que 200 bp (falha branda)."
+    return 2
+  fi
+  log_info "Montador $asm concluido. Maior contig: ${LAST_MAX_CONTIG_LEN} bp."
   return 0
 }
 
@@ -174,99 +189,171 @@ ASSEMBLER_REQUESTED="$ASSEMBLER"
 ASSEMBLER_USED="$ASSEMBLER"
 ASSEMBLY_FALLBACK=0
 ASSEMBLY_FAILURE_TYPE="NONE"
+CONSENSUS_MANIFEST_SRC=""
+CONSENSUS_WORK=""
 
-# Executa montador inicial
-run_single_assembler "$ASSEMBLER"
-ASM_STATUS=$?
-
-if [[ $ASM_STATUS -eq 0 ]]; then
-  copy_contigs "$LAST_CONTIGS_SRC" "$STD_ASM_DIR/contigs.fa"
-elif [[ $ASM_STATUS -eq 2 ]]; then
-  # Falha branda: não cascateia por padrão, apenas reporta
-  log_info "Montador inicial $ASSEMBLER reportou Falha Branda. Nao havera cascateamento automatico."
-  ASSEMBLY_FAILURE_TYPE="SOFT"
-  # Toca arquivo contigs.fa vazio para a etapa de resgate
-  touch "$STD_ASM_DIR/contigs.fa"
-else
-  # Falha dura: executa cadeia de fallback
-  log_recovered "Montador inicial $ASSEMBLER reportou Falha Dura. Iniciando cadeia de fallback..."
-  ASSEMBLY_FALLBACK=1
-
-  FALLBACK_RESOLVED=0
-  if [[ "$ASSEMBLER" == "spades" ]]; then
-    run_single_assembler "metaspades"
-    FB_STATUS=$?
-    if [[ $FB_STATUS -eq 0 ]]; then
-      ASSEMBLER_USED="metaspades"
-      copy_contigs "$LAST_CONTIGS_SRC" "$STD_ASM_DIR/contigs.fa"
-      FALLBACK_RESOLVED=1
-    elif [[ $FB_STATUS -eq 2 ]]; then
-      ASSEMBLER_USED="metaspades"
-      ASSEMBLY_FAILURE_TYPE="SOFT"
-      touch "$STD_ASM_DIR/contigs.fa"
-      FALLBACK_RESOLVED=1
-    else
-      # Tentativa Velvet
-      run_single_assembler "velvet"
-      FB2_STATUS=$?
-      if [[ $FB2_STATUS -eq 0 ]]; then
-        ASSEMBLER_USED="velvet"
-        copy_contigs "$LAST_CONTIGS_SRC" "$STD_ASM_DIR/contigs.fa"
-        FALLBACK_RESOLVED=1
-      elif [[ $FB2_STATUS -eq 2 ]]; then
-        ASSEMBLER_USED="velvet"
-        ASSEMBLY_FAILURE_TYPE="SOFT"
-        touch "$STD_ASM_DIR/contigs.fa"
-        FALLBACK_RESOLVED=1
-      fi
+if [[ "$ASSEMBLER" == "consensus" ]]; then
+  CONSENSUS_WORK="$(mktemp -d "${STD_ASM_DIR}/.assembly-consensus.XXXXXX")" || exit 1
+  mapfile -t CONSENSUS_ASSEMBLERS < <(
+    python3 "${SCRIPT_DIR}/analysis_profiles.py" \
+      --config "$ANALYSIS_PROFILES_CONFIG" --profile "$ANALYSIS_PROFILE" --field assemblers
+  )
+  CONSENSUS_INPUT_ARGS=()
+  CONSENSUS_STATUS_ARGS=()
+  SUCCESSFUL_ASSEMBLERS=()
+  CONSENSUS_MAX_CONTIG_LEN=0
+  for candidate_assembler in "${CONSENSUS_ASSEMBLERS[@]}"; do
+    if [[ "$candidate_assembler" == "metaspades" && -n "$RAW_SINGLE" ]]; then
+      CONSENSUS_STATUS_ARGS+=(--status "metaspades=NOT_APPLICABLE")
+      log_warning "metaSPAdes não é aplicável a esta entrada single-end."
+      continue
     fi
-  elif [[ "$ASSEMBLER" == "metaspades" ]]; then
-    run_single_assembler "spades"
-    FB_STATUS=$?
-    if [[ $FB_STATUS -eq 0 ]]; then
-      ASSEMBLER_USED="spades"
-      copy_contigs "$LAST_CONTIGS_SRC" "$STD_ASM_DIR/contigs.fa"
-      FALLBACK_RESOLVED=1
-    elif [[ $FB_STATUS -eq 2 ]]; then
-      ASSEMBLER_USED="spades"
-      ASSEMBLY_FAILURE_TYPE="SOFT"
-      touch "$STD_ASM_DIR/contigs.fa"
-      FALLBACK_RESOLVED=1
-    else
-      # Tentativa Velvet
-      run_single_assembler "velvet"
-      FB2_STATUS=$?
-      if [[ $FB2_STATUS -eq 0 ]]; then
-        ASSEMBLER_USED="velvet"
-        copy_contigs "$LAST_CONTIGS_SRC" "$STD_ASM_DIR/contigs.fa"
-        FALLBACK_RESOLVED=1
-      elif [[ $FB2_STATUS -eq 2 ]]; then
-        ASSEMBLER_USED="velvet"
-        ASSEMBLY_FAILURE_TYPE="SOFT"
-        touch "$STD_ASM_DIR/contigs.fa"
-        FALLBACK_RESOLVED=1
-      fi
+    run_single_assembler "$candidate_assembler"
+    candidate_status=$?
+    case "$candidate_status" in
+      0)
+        CONSENSUS_STATUS_ARGS+=(--status "${candidate_assembler}=SUCCESS")
+        ;;
+      2)
+        CONSENSUS_STATUS_ARGS+=(--status "${candidate_assembler}=SOFT")
+        ;;
+      *)
+        CONSENSUS_STATUS_ARGS+=(--status "${candidate_assembler}=HARD")
+        continue
+        ;;
+    esac
+    SUCCESSFUL_ASSEMBLERS+=("$candidate_assembler")
+    CONSENSUS_INPUT_ARGS+=(--input "${candidate_assembler}=${LAST_CONTIGS_SRC}")
+    if (( LAST_MAX_CONTIG_LEN > CONSENSUS_MAX_CONTIG_LEN )); then
+      CONSENSUS_MAX_CONTIG_LEN="$LAST_MAX_CONTIG_LEN"
     fi
-  fi
+  done
 
-  if [[ $FALLBACK_RESOLVED -eq 0 ]]; then
-    log_warning "Todos os montadores da cadeia de fallback falharam."
+  ASSEMBLER_USED="$(IFS=,; echo "${SUCCESSFUL_ASSEMBLERS[*]}")"
+  if ((${#SUCCESSFUL_ASSEMBLERS[@]} == 0)); then
+    ASM_STATUS=1
     ASSEMBLY_FAILURE_TYPE="HARD"
-    touch "$STD_ASM_DIR/contigs.fa"
+    LAST_CONTIGS_SRC=""
+    LAST_MAX_CONTIG_LEN=0
   else
-    log_recovered "Cadeia de fallback resolvida. Montador utilizado: $ASSEMBLER_USED (Tipo de Falha: $ASSEMBLY_FAILURE_TYPE)"
+    python3 "${SCRIPT_DIR}/evidence/assembly_consensus.py" combine \
+      "${CONSENSUS_INPUT_ARGS[@]}" "${CONSENSUS_STATUS_ARGS[@]}" \
+      --out-fasta "${CONSENSUS_WORK}/contigs.fa" \
+      --out-manifest "${CONSENSUS_WORK}/assembly_consensus.json" \
+      --minimum-successful "$PROFILE_MINIMUM_SUCCESSFUL" \
+      --profile "$ANALYSIS_PROFILE" || {
+        ASM_STATUS=1
+        ASSEMBLY_FAILURE_TYPE="HARD"
+        LAST_CONTIGS_SRC=""
+        LAST_MAX_CONTIG_LEN=0
+        log_error "Falha ao consolidar consenso entre montadores."
+      }
+    if [[ "$ASM_STATUS" -eq 1 ]]; then
+      :
+    else
+    LAST_CONTIGS_SRC="${CONSENSUS_WORK}/contigs.fa"
+    CONSENSUS_MANIFEST_SRC="${CONSENSUS_WORK}/assembly_consensus.json"
+    LAST_MAX_CONTIG_LEN="$CONSENSUS_MAX_CONTIG_LEN"
+    ASM_STATUS=0
+    if ((${#SUCCESSFUL_ASSEMBLERS[@]} < PROFILE_MINIMUM_SUCCESSFUL)); then
+      ASSEMBLY_FAILURE_TYPE="SOFT"
+      log_warning "Consenso incompleto: ${#SUCCESSFUL_ASSEMBLERS[@]}/${PROFILE_MINIMUM_SUCCESSFUL} montadores aplicáveis produziram contigs."
+    else
+      ASSEMBLY_FAILURE_TYPE="NONE"
+    fi
+    fi
   fi
+else
+  run_single_assembler "$ASSEMBLER"
+  ASM_STATUS=$?
+
+  if [[ $ASM_STATUS -eq 1 ]]; then
+    ASSEMBLY_FALLBACK=1
+    log_recovered "Montador inicial $ASSEMBLER reportou falha dura. Iniciando fallback."
+    case "$ASSEMBLER" in
+      spades) FALLBACK_ORDER=(metaspades velvet) ;;
+      metaspades) FALLBACK_ORDER=(spades velvet) ;;
+      velvet) FALLBACK_ORDER=(spades metaspades) ;;
+    esac
+    ASM_STATUS=1
+    for fallback in "${FALLBACK_ORDER[@]}"; do
+      ASSEMBLER_USED="$fallback"
+      run_single_assembler "$fallback"
+      ASM_STATUS=$?
+      [[ $ASM_STATUS -eq 1 ]] || break
+    done
+  fi
+
+  case "$ASM_STATUS" in
+    0)
+      ASSEMBLY_FAILURE_TYPE="NONE"
+      ;;
+    2)
+      ASSEMBLY_FAILURE_TYPE="SOFT"
+      # Short contigs remain valid computational artifacts. Keeping them does not
+      # promote their scientific evidence level; it only prevents data loss.
+      ;;
+    *)
+      ASSEMBLY_FAILURE_TYPE="HARD"
+      LAST_CONTIGS_SRC=""
+      LAST_MAX_CONTIG_LEN=0
+      log_warning "Todos os montadores aplicaveis falharam."
+      ;;
+  esac
 fi
 
-# Grava metadados da montagem
-METADATA_FILE="${STD_ASM_DIR}/assembly_metadata.env"
-{
-  echo "ASSEMBLER_REQUESTED=\"${ASSEMBLER_REQUESTED}\""
-  echo "ASSEMBLER_USED=\"${ASSEMBLER_USED}\""
-  echo "ASSEMBLY_FALLBACK=${ASSEMBLY_FALLBACK}"
-  echo "ASSEMBLY_FAILURE_TYPE=\"${ASSEMBLY_FAILURE_TYPE}\""
-  echo "RESCUE_TRIGGERED=0"
-  echo "INPUT_MODE=READS"
-} > "$METADATA_FILE"
+# Publish current-run canonical artifacts without ever treating an old contig
+# file as output from this attempt. The previous non-empty canonical FASTA is
+# retained as a recoverable sidecar before replacement.
+CONTIGS_TMP="$(mktemp "${STD_ASM_DIR}/.contigs.fa.XXXXXX")" || exit 1
+METADATA_TMP="$(mktemp "${STD_ASM_DIR}/.assembly_metadata.env.XXXXXX")" || {
+  rm -f "$CONTIGS_TMP"
+  exit 1
+}
+CONSENSUS_MANIFEST_TMP=""
+if [[ -n "$CONSENSUS_MANIFEST_SRC" ]]; then
+  CONSENSUS_MANIFEST_TMP="$(mktemp "${STD_ASM_DIR}/.assembly_consensus.json.XXXXXX")" || exit 1
+  cp -f "$CONSENSUS_MANIFEST_SRC" "$CONSENSUS_MANIFEST_TMP" || exit 1
+fi
+trap 'rm -f "$CONTIGS_TMP" "$METADATA_TMP" "$CONSENSUS_MANIFEST_TMP"; [[ -z "$CONSENSUS_WORK" ]] || rm -rf "$CONSENSUS_WORK"' EXIT
 
-log_info "Metadados de montagem salvos em ${METADATA_FILE}"
+if [[ -n "$LAST_CONTIGS_SRC" ]]; then
+  cp -f "$LAST_CONTIGS_SRC" "$CONTIGS_TMP" || exit 1
+else
+  : > "$CONTIGS_TMP"
+fi
+
+{
+  printf 'ASSEMBLER_REQUESTED="%s"\n' "$ASSEMBLER_REQUESTED"
+  printf 'ASSEMBLER_USED="%s"\n' "$ASSEMBLER_USED"
+  printf 'ASSEMBLY_FALLBACK=%s\n' "$ASSEMBLY_FALLBACK"
+  printf 'ASSEMBLY_FAILURE_TYPE="%s"\n' "$ASSEMBLY_FAILURE_TYPE"
+  printf 'ASSEMBLY_MAX_CONTIG_LEN=%s\n' "$LAST_MAX_CONTIG_LEN"
+  printf 'ANALYSIS_PROFILE="%s"\n' "$ANALYSIS_PROFILE"
+  printf 'ASSEMBLY_STRATEGY="%s"\n' "$PROFILE_STRATEGY"
+  printf 'ASSEMBLY_CONSENSUS_MINIMUM=%s\n' "$PROFILE_MINIMUM_SUCCESSFUL"
+  printf 'RESCUE_TRIGGERED=0\n'
+  printf 'INPUT_MODE="READS"\n'
+} > "$METADATA_TMP"
+
+if [[ -s "${STD_ASM_DIR}/contigs.fa" ]]; then
+  PREVIOUS_TMP="$(mktemp "${STD_ASM_DIR}/.contigs.previous.fa.XXXXXX")" || exit 1
+  cp -p "${STD_ASM_DIR}/contigs.fa" "$PREVIOUS_TMP" || exit 1
+  mv -f "$PREVIOUS_TMP" "${STD_ASM_DIR}/contigs.previous.fa" || exit 1
+fi
+mv -f "$CONTIGS_TMP" "${STD_ASM_DIR}/contigs.fa" || exit 1
+mv -f "$METADATA_TMP" "${STD_ASM_DIR}/assembly_metadata.env" || exit 1
+if [[ -n "$CONSENSUS_MANIFEST_TMP" ]]; then
+  mv -f "$CONSENSUS_MANIFEST_TMP" "${STD_ASM_DIR}/assembly_consensus.json" || exit 1
+fi
+if [[ -n "$CONSENSUS_WORK" ]]; then
+  rm -rf "$CONSENSUS_WORK"
+  CONSENSUS_WORK=""
+fi
+trap - EXIT
+
+log_info "Artefatos canonicos da montagem atualizados em ${STD_ASM_DIR}."
+if [[ "$ASSEMBLY_FAILURE_TYPE" == "HARD" ]]; then
+  exit 1
+fi
+exit 0

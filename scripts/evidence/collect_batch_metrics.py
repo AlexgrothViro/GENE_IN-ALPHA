@@ -9,11 +9,33 @@ from pathlib import Path
 
 try:
     from .common import read_tsv, write_tsv_atomic
+    from .evidence_contract import validate_document
 except ImportError:
     from common import read_tsv, write_tsv_atomic
+    from evidence_contract import validate_document
 
 
-FIELDS = ["batch_id", "sample_id", "target", "expected_target", "rpm_post_qc", "rpm_nonhost", "sequence_hashes", "evidence_level", "analysis_outcome"]
+FIELDS = [
+    "batch_id", "sample_id", "target", "expected_target", "rpm_post_qc",
+    "rpm_nonhost", "sequence_hashes", "evidence_level", "analysis_outcome",
+    "positive_control_qualification",
+]
+
+
+def positive_control_qualification(evidence: dict) -> str:
+    gates = {
+        gate.get("gate_id"): gate.get("status")
+        for gate in evidence.get("promotion_gates", [])
+        if isinstance(gate, dict)
+    }
+    required = {
+        "candidate_evidence", "competitive_specificity", "reference_scoped_support",
+    }
+    return (
+        "QUALIFIED"
+        if all(gates.get(gate_id) == "PASS" for gate_id in required)
+        else "NOT_QUALIFIED"
+    )
 
 
 def fastq_reads(path: Path) -> int | None:
@@ -54,7 +76,7 @@ def main() -> None:
         if not (evidence_dir / "SUCCESS.json").is_file():
             raise ValueError(f"execução incompleta para amostra {sample}")
         with (evidence_dir / "sample_evidence.json").open("r", encoding="utf-8") as handle:
-            evidence = json.load(handle)
+            evidence = validate_document(json.load(handle))
         hashes = []
         fragment_path = evidence_dir / "fragment_evidence.tsv"
         if fragment_path.is_file():
@@ -77,6 +99,7 @@ def main() -> None:
             "rpm_nonhost": f"{rpm_nonhost:.8f}" if rpm_nonhost is not None else "NA",
             "sequence_hashes": ";".join(hashes), "evidence_level": evidence.get("evidence_level", "INCONCLUSIVE"),
             "analysis_outcome": evidence.get("analysis_outcome", "NOT_EVALUABLE"),
+            "positive_control_qualification": positive_control_qualification(evidence),
         })
     write_tsv_atomic(args.out, output, FIELDS)
 

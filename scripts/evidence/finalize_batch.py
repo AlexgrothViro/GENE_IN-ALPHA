@@ -13,16 +13,22 @@ try:
         build_artifact_manifest, fsync_directory, read_tsv, sha256_file,
         validate_artifact_manifest, write_json_atomic,
     )
-    from .evidence_contract import PIPELINE_VERSION, validate_document
+    from .evidence_contract import (
+        PIPELINE_VERSION, promote_for_public_output, validate_document,
+    )
     from .run_state import read_state
+    from .run_state import state_lock
     from .validate_run_artifacts import validate
 except ImportError:
     from common import (
         build_artifact_manifest, fsync_directory, read_tsv, sha256_file,
         validate_artifact_manifest, write_json_atomic,
     )
-    from evidence_contract import PIPELINE_VERSION, validate_document
+    from evidence_contract import (
+        PIPELINE_VERSION, promote_for_public_output, validate_document,
+    )
     from run_state import read_state
+    from run_state import state_lock
     from validate_run_artifacts import validate
 
 
@@ -30,15 +36,65 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def write_sample_commit(sample_dir: Path, row: dict[str, str], parent_run_id: str) -> None:
+def promote_directory(staging: Path, final: Path) -> None:
+    os.replace(staging, final)
+
+
+def validate_batch_evidence(path: Path, expected_run_id: str) -> dict:
+    with path.open("r", encoding="utf-8", errors="strict") as handle:
+        value = promote_for_public_output(json.load(handle))
+    if value["run_id"] != expected_run_id:
+        raise ValueError("batch evidence run_id does not match the batch state")
+    return value
+
+
+def validate_batch_identity(state: dict, batch: dict, rows: list[dict[str, str]],
+                            staging: Path, final: Path) -> None:
+    run_id = state.get("run_id")
+    if state.get("action") != "evidence_batch":
+        raise ValueError("batch finalizer requires evidence_batch state")
+    if batch.get("run_id") != run_id or batch.get("batch_id") != state.get("batch_id"):
+        raise ValueError("batch evidence identity does not match run state")
+    row_samples = [row.get("sample_id", "") for row in rows]
+    if len(row_samples) != len(set(row_samples)) or row_samples != state.get("sample_ids"):
+        raise ValueError("run map samples do not match run state")
+    if staging.name != run_id or final.name != run_id:
+        raise ValueError("staging and final directories must match run_id")
+    if state.get("status") in {"done", "done_with_warning", "blocked", "failed", "cancelled"}:
+        raise ValueError(f"batch state is already terminal: {state.get('status')}")
+
+
+def validate_source_sample(sample_dir: Path, row: dict[str, str]) -> None:
     source_success_path = sample_dir / "SUCCESS.json"
+    if not source_success_path.is_file():
+        source_success_path = sample_dir / "SOURCE_SUCCESS.json"
     if not source_success_path.is_file():
         raise ValueError(f"resultado incompleto da amostra {row['sample_id']}")
     source_success = json.loads(source_success_path.read_text(encoding="utf-8", errors="strict"))
     if source_success.get("status") not in {"done", "done_with_warning"}:
         raise ValueError(f"execução filha não concluída da amostra {row['sample_id']}")
-    write_json_atomic(sample_dir / "SOURCE_SUCCESS.json", source_success)
-    source_success_path.unlink()
+    if source_success.get("run_id") != row.get("run_id"):
+        raise ValueError(f"run_id da execução filha não corresponde à amostra {row['sample_id']}")
+    with (sample_dir / "sample_evidence.json").open("r", encoding="utf-8", errors="strict") as handle:
+        evidence = validate_document(json.load(handle))
+    if evidence.get("sample_id") != row.get("sample_id") or evidence.get("run_id") != row.get("run_id"):
+        raise ValueError(f"identidade científica divergente da amostra {row['sample_id']}")
+
+
+def write_sample_commit(sample_dir: Path, row: dict[str, str], parent_run_id: str,
+                        parent_state: dict) -> None:
+    source_success_path = sample_dir / "SUCCESS.json"
+    if not source_success_path.is_file():
+        source_success_path = sample_dir / "SOURCE_SUCCESS.json"
+    if not source_success_path.is_file():
+        raise ValueError(f"resultado incompleto da amostra {row['sample_id']}")
+    source_success = json.loads(source_success_path.read_text(encoding="utf-8", errors="strict"))
+    if source_success.get("status") not in {"done", "done_with_warning"}:
+        raise ValueError(f"execução filha não concluída da amostra {row['sample_id']}")
+    source_copy = sample_dir / "SOURCE_SUCCESS.json"
+    if not source_copy.exists():
+        write_json_atomic(source_copy, source_success)
+    (sample_dir / "SUCCESS.json").unlink(missing_ok=True)
     old_manifest = sample_dir / "artifact_manifest.json"
     if old_manifest.exists():
         old_manifest.unlink()
@@ -55,8 +111,12 @@ def write_sample_commit(sample_dir: Path, row: dict[str, str], parent_run_id: st
     write_json_atomic(sample_dir / "SUCCESS.json", {
         "run_id": row["run_id"], "parent_run_id": parent_run_id,
         "pipeline_version": PIPELINE_VERSION,
+        "policy_version": parent_state.get("policy_version"),
+        "activation_record_id": parent_state.get("activation_record_id"),
+        "activation_record_sha256": parent_state.get("activation_record_sha256"),
+        "evidence_ceiling": parent_state.get("evidence_ceiling"),
         "status": source_success.get("status", "done"), "completed_at": now(),
-        "shadow_mode": True, "artifact_count": len(manifest["files"]),
+        "shadow_mode": parent_state.get("shadow_mode", False), "artifact_count": len(manifest["files"]),
         "artifact_manifest_sha256": sha256_file(sample_dir / "artifact_manifest.json"),
         "sample_evidence_sha256": sha256_file(sample_dir / "sample_evidence.json"),
     })
@@ -72,49 +132,84 @@ def main() -> None:
     args = parser.parse_args()
     if args.final.exists():
         raise FileExistsError(f"diretório final já existe: {args.final}")
-    state = read_state(args.state)
+    args.final.parent.mkdir(parents=True, exist_ok=True)
+    if args.staging.stat().st_dev != args.final.parent.stat().st_dev:
+        raise ValueError("batch staging and final directory must share a filesystem")
+    if (args.staging / "SUCCESS.json").exists():
+        raise ValueError("batch staging contains an invalid pre-existing SUCCESS.json")
+    if (args.staging / "artifact_manifest.json").is_file():
+        (args.staging / "artifact_manifest.json").unlink()
     rows = read_tsv(args.run_map)
     required = ["batch_evidence.json", "control_status.tsv", "batch_report.md", "provenance.json"]
     missing = [name for name in required if not (args.staging / name).is_file()]
     if missing:
         raise ValueError("artefatos de lote ausentes: " + ", ".join(missing))
-    for row in rows:
-        write_sample_commit(args.staging / "samples" / row["sample_id"], row, state["run_id"])
+    with state_lock(args.state):
+        state = read_state(args.state)
+        batch = validate_batch_evidence(args.staging / "batch_evidence.json", state["run_id"])
+        validate_batch_identity(state, batch, rows, args.staging, args.final)
+        # Validate every child identity before mutating any child commit.
+        for row in rows:
+            validate_source_sample(args.staging / "samples" / row["sample_id"], row)
+        for row in rows:
+            write_sample_commit(args.staging / "samples" / row["sample_id"], row, state["run_id"], state)
 
-    shutil.rmtree(args.staging / "work", ignore_errors=True)
-    state["status"] = "done_with_warning" if state.get("warnings") else "done"
-    state["evidence_v2_status"] = state["status"]
-    state["current_stage"] = None
-    state["finished_at"] = now()
-    state["artifacts"].update({
-        "batch_evidence": f"runs/{state['run_id']}/batch_evidence.json",
-        "control_status": f"runs/{state['run_id']}/control_status.tsv",
-        "report": f"runs/{state['run_id']}/batch_report.md",
-    })
-    write_json_atomic(args.staging / "run_state.json", state)
-    manifest = build_artifact_manifest(args.staging)
-    write_json_atomic(args.staging / "artifact_manifest.json", manifest)
-    manifest_errors = validate_artifact_manifest(args.staging, manifest)
-    if manifest_errors:
-        raise ValueError("; ".join(manifest_errors))
-    # SUCCESS is deliberately the final batch write.
-    write_json_atomic(args.staging / "SUCCESS.json", {
-        "run_id": state["run_id"], "pipeline_version": PIPELINE_VERSION,
-        "status": state["status"], "completed_at": now(),
-        "batch_evidence_sha256": sha256_file(args.staging / "batch_evidence.json"),
-        "artifact_manifest_sha256": sha256_file(args.staging / "artifact_manifest.json"),
-        "artifact_count": len(manifest["files"]), "sample_count": len(rows), "shadow_mode": True,
-    })
-    fsync_directory(args.staging)
-    try:
-        args.final.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(args.staging, args.final)
-    except Exception:
-        (args.staging / "SUCCESS.json").unlink(missing_ok=True)
+        work = (args.staging / "work").resolve()
+        work.relative_to(args.staging.resolve())
+        if work.exists():
+            shutil.rmtree(work)
+        state["status"] = "done_with_warning" if state.get("warnings") else "done"
+        state["evidence_v2_status"] = state["status"]
+        state["execution_status"] = "warning" if state["status"] == "done_with_warning" else "done"
+        state["current_stage"] = None
+        state["finished_at"] = now()
+        state["artifacts"].update({
+            "batch_evidence": f"runs/{state['run_id']}/batch_evidence.json",
+            "control_status": f"runs/{state['run_id']}/control_status.tsv",
+            "report": f"runs/{state['run_id']}/batch_report.md",
+        })
+        write_json_atomic(args.staging / "run_state.json", state)
+        manifest = build_artifact_manifest(args.staging)
+        write_json_atomic(args.staging / "artifact_manifest.json", manifest)
+        manifest_errors = validate_artifact_manifest(args.staging, manifest)
+        if manifest_errors:
+            (args.staging / "artifact_manifest.json").unlink(missing_ok=True)
+            raise ValueError("; ".join(manifest_errors))
+        success = {
+            "run_id": state["run_id"], "pipeline_version": PIPELINE_VERSION,
+            "policy_version": state.get("policy_version"),
+            "activation_record_id": state.get("activation_record_id"),
+            "activation_record_sha256": state.get("activation_record_sha256"),
+            "evidence_ceiling": state.get("evidence_ceiling"),
+            "status": state["status"], "completed_at": now(),
+            "batch_evidence_sha256": sha256_file(args.staging / "batch_evidence.json"),
+            "artifact_manifest_sha256": sha256_file(args.staging / "artifact_manifest.json"),
+        "artifact_count": len(manifest["files"]), "sample_count": len(rows),
+        "shadow_mode": state.get("shadow_mode", False),
+        }
         fsync_directory(args.staging)
-        raise
-    fsync_directory(args.final.parent)
-    write_json_atomic(args.state, state)
+        try:
+            promote_directory(args.staging, args.final)
+        except Exception:
+            (args.staging / "artifact_manifest.json").unlink(missing_ok=True)
+            fsync_directory(args.staging)
+            raise
+        fsync_directory(args.final.parent)
+        try:
+            # The promoted batch remains invalid until this final commit write.
+            write_json_atomic(args.final / "SUCCESS.json", success)
+            fsync_directory(args.final)
+            write_json_atomic(args.state, state)
+        except Exception:
+            (args.final / "SUCCESS.json").unlink(missing_ok=True)
+            fsync_directory(args.final)
+            try:
+                os.replace(args.final, args.staging)
+                (args.staging / "artifact_manifest.json").unlink(missing_ok=True)
+                fsync_directory(args.final.parent)
+            except Exception:
+                pass
+            raise
     print(args.final)
 
 

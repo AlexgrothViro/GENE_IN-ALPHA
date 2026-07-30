@@ -7,6 +7,7 @@ sys.path.insert(0, str(ROOT / "scripts" / "evidence"))
 
 from classify_sample import classify
 from evidence_contract import validate_document
+from export_evidence import render
 from summarize_coverage import summarize
 
 
@@ -26,6 +27,23 @@ class SampleClassTests(unittest.TestCase):
         self.assertEqual(result["evidence_level"], "E1")
         self.assertEqual(result["analysis_outcome"], "EVIDENCE_RECOVERED")
         self.assertEqual(result["reported_conclusion"], "SHADOW_ONLY")
+        self.assertEqual(result["candidates"][0]["candidate_class"], "EXPLORATORY_FRAGMENT")
+        self.assertEqual(result["candidates"][0]["promotion_status"], "BLOCKED")
+        self.assertIn(
+            "BELOW_MINIMUM_CANDIDATE_BP",
+            result["candidates"][0]["blocking_reasons"],
+        )
+        self.assertEqual(result["metrics"]["promotion_eligible_candidate_count"], 0)
+        self.assertEqual(
+            next(
+                gate for gate in result["promotion_gates"]
+                if gate["gate_id"] == "candidate_evidence"
+            )["status"],
+            "BLOCKED",
+        )
+        report = render(result)
+        self.assertIn("classe `EXPLORATORY_FRAGMENT`", report)
+        self.assertIn("promoção `BLOCKED`", report)
 
     def test_uncontrolled_sample_is_capped_at_configured_ceiling(self):
         loci = [

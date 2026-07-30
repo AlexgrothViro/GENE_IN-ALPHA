@@ -1,7 +1,7 @@
 # Scripts Legacy
 
 > **LEGACY / TEST-ONLY:** estes scripts não têm os gates de evidência da V2,
-> não sustentam benchmark, artigo, dissertação ou conclusão científica nova.
+> não sustentam benchmark, artigo, publicação ou conclusão científica nova.
 > O fluxo avançado usa diretórios isolados em `results/legacy/` por padrão e
 > não executa `make test`, não reconstrói bancos e não remove resultados
 > compartilhados. Dependências ausentes devem produzir falha explícita.
@@ -38,4 +38,4 @@ Estão preservados aqui para referência e possível reutilização futura.
 Antes de usar qualquer script deste diretório, verifique se as dependências estão instaladas
 (`mafft`, `iqtree` ou `iqtree2`) e ajuste os caminhos conforme necessário.
 
-Consulte `docs/SCRIPTS_MATRIX.md` para a visão completa de todos os scripts do projeto.
+Consulte `docs/architecture/scripts-matrix.md` para a visão completa de todos os scripts do projeto.

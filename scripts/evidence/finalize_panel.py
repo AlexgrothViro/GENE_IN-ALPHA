@@ -9,9 +9,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 try:
-    from .common import fsync_directory, read_fasta, read_tsv, sha256_file, write_json_atomic
+    from .common import fsync_directory, fsync_file, read_fasta, read_tsv, sha256_file, write_json_atomic
 except ImportError:
-    from common import fsync_directory, read_fasta, read_tsv, sha256_file, write_json_atomic
+    from common import fsync_directory, fsync_file, read_fasta, read_tsv, sha256_file, write_json_atomic
 
 
 REQUIRED_CATEGORIES = {
@@ -32,6 +32,10 @@ def tool_version(command: str) -> dict[str, str]:
     }
 
 
+def promote_directory(staging: Path, final: Path) -> None:
+    os.replace(staging, final)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Validate and atomically promote a complete competitive panel")
     parser.add_argument("--staging", required=True, type=Path)
@@ -40,6 +44,14 @@ def main() -> None:
     args = parser.parse_args()
     if args.final.exists():
         raise FileExistsError(f"panel already exists: {args.final}")
+    if args.final.name != args.panel_id:
+        raise ValueError("final panel directory must match panel_id")
+    if (args.staging / "SUCCESS.json").exists():
+        raise ValueError("panel staging contains an invalid pre-existing SUCCESS.json")
+    (args.staging / "panel_manifest.json").unlink(missing_ok=True)
+    args.final.parent.mkdir(parents=True, exist_ok=True)
+    if args.staging.stat().st_dev != args.final.parent.stat().st_dev:
+        raise ValueError("panel staging and final directory must share a filesystem")
     fasta = args.staging / "panel.fa"
     labels = args.staging / "labels.tsv"
     sequences = read_fasta(fasta)
@@ -58,7 +70,20 @@ def main() -> None:
     index_files = bt2 if all(path.is_file() and path.stat().st_size for path in bt2) else bt2l
     if not all(path.is_file() and path.stat().st_size for path in index_files):
         raise ValueError("incomplete Bowtie2 index")
-    files = [fasta, labels, *blast_files, *index_files]
+    partials = [
+        path for path in args.staging.rglob("*")
+        if path.is_file() and (path.name.startswith(".") or path.name.endswith(".tmp"))
+    ]
+    if partials:
+        raise ValueError("temporary panel artifacts remain: " + ", ".join(path.name for path in partials))
+    files = sorted(
+        path for path in args.staging.rglob("*")
+        if path.is_file() and path.name not in {"SUCCESS.json", "panel_manifest.json"}
+    )
+    if not files:
+        raise ValueError("competitive panel has no artifacts")
+    for path in files:
+        fsync_file(path)
     manifest = {
         "schema_version": "2.0", "panel_id": args.panel_id,
         "created_at": datetime.now(timezone.utc).isoformat(), "sequence_count": len(sequences),
@@ -70,15 +95,32 @@ def main() -> None:
         },
     }
     write_json_atomic(args.staging / "panel_manifest.json", manifest)
-    # SUCCESS is intentionally the last write before atomic promotion.
-    write_json_atomic(args.staging / "SUCCESS.json", {
+    success = {
         "panel_id": args.panel_id, "status": "done", "shadow_mode": True,
         "manifest": "panel_manifest.json", "manifest_sha256": sha256_file(args.staging / "panel_manifest.json"),
-    })
+    }
     fsync_directory(args.staging)
-    args.final.parent.mkdir(parents=True, exist_ok=True)
-    os.replace(args.staging, args.final)
+    try:
+        promote_directory(args.staging, args.final)
+    except Exception:
+        (args.staging / "panel_manifest.json").unlink(missing_ok=True)
+        fsync_directory(args.staging)
+        raise
     fsync_directory(args.final.parent)
+    try:
+        # The promoted panel is consumable only after this final commit write.
+        write_json_atomic(args.final / "SUCCESS.json", success)
+        fsync_directory(args.final)
+    except Exception:
+        (args.final / "SUCCESS.json").unlink(missing_ok=True)
+        fsync_directory(args.final)
+        try:
+            promote_directory(args.final, args.staging)
+            (args.staging / "panel_manifest.json").unlink(missing_ok=True)
+            fsync_directory(args.final.parent)
+        except Exception:
+            pass
+        raise
     print(args.final)
 
 

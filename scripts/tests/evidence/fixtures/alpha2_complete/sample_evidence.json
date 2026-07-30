@@ -4,7 +4,7 @@
   "caveats": [
     "Evidence 2.0 alpha.2 opera em shadow mode; E2 e E3 permanecem estruturalmente bloqueados.",
     "E1 autoriza relatar apenas evidência computacional exploratória, não presença ou identidade viral.",
-    "Nenhuma evidência recuperada nas condições avaliadas; isso não demonstra ausência viral.",
+    "Nenhuma evidência recuperada sob os limiares configurados; isso não demonstra ausência viral.",
     "Controles não autorizam promoção: UNCONTROLLED."
   ],
   "control_status": "UNCONTROLLED",
@@ -27,6 +27,7 @@
     "distinct_starts": 0,
     "max_window_depth_fraction": 0.0,
     "median_depth_covered": 0.0,
+    "promotion_eligible_candidate_count": 0,
     "proper_pair_templates": 0,
     "qualifying_loci": 0,
     "total_nonredundant_reference_bp": 0,
@@ -36,8 +37,8 @@
   "promotion_gates": [
     {
       "gate_id": "candidate_evidence",
-      "reason": "Nenhum candidato foi recuperado.",
-      "status": "NOT_APPLICABLE"
+      "reason": "Nenhum locus específico atende locus.minimum_candidate_bp.",
+      "status": "BLOCKED"
     },
     {
       "gate_id": "competitive_specificity",
@@ -46,12 +47,17 @@
     },
     {
       "gate_id": "reference_scoped_support",
-      "reason": "Suporte candidato-específico indisponível.",
+      "reason": "Nenhum suporte candidato-específico atende os limiares configurados.",
+      "status": "BLOCKED"
+    },
+    {
+      "gate_id": "multi_locus_evidence",
+      "reason": "Candidatos não atendem os limiares multi-locus configurados.",
       "status": "BLOCKED"
     },
     {
       "gate_id": "reference_scoped_coverage",
-      "reason": "Cobertura candidato-específica indisponível.",
+      "reason": "Nenhuma cobertura candidato-específica atende os limiares configurados.",
       "status": "BLOCKED"
     },
     {

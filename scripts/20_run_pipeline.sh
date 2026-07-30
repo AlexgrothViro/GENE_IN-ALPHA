@@ -28,6 +28,7 @@ done
 INCOMING_DB="${DB:-}"
 INCOMING_DB_QUERY="${DB_QUERY:-}"
 INCOMING_ASSEMBLER="${ASSEMBLER:-}"
+INCOMING_ANALYSIS_PROFILE="${ANALYSIS_PROFILE:-}"
 INCOMING_HOST_FILTER_ENABLED="${HOST_FILTER_ENABLED:-}"
 INCOMING_HOST_NAME="${HOST_NAME:-}"
 INCOMING_HOST_ACCESSION="${HOST_ACCESSION:-}"
@@ -77,6 +78,9 @@ fi
 
 if [[ -n "$INCOMING_ASSEMBLER" ]]; then
   ASSEMBLER="$INCOMING_ASSEMBLER"
+fi
+if [[ -n "$INCOMING_ANALYSIS_PROFILE" ]]; then
+  ANALYSIS_PROFILE="$INCOMING_ANALYSIS_PROFILE"
 fi
 
 if [[ -n "$INCOMING_HOST_FILTER_ENABLED" ]]; then
@@ -133,14 +137,17 @@ EVIDENCE_PANEL_INDEX="${INCOMING_EVIDENCE_PANEL_INDEX:-${EVIDENCE_PANEL_INDEX:-}
 EVIDENCE_RUN_ID="${INCOMING_EVIDENCE_RUN_ID:-${EVIDENCE_RUN_ID:-}}"
 EVIDENCE_BATCH_ID="${INCOMING_EVIDENCE_BATCH_ID:-${EVIDENCE_BATCH_ID:-}}"
 EVIDENCE_RESERVATION_TOKEN="${INCOMING_EVIDENCE_RESERVATION_TOKEN:-}"
+ANALYSIS_PROFILE="${ANALYSIS_PROFILE:-canonical-e1}"
+ANALYSIS_PROFILES_CONFIG="${ANALYSIS_PROFILES_CONFIG:-${REPO_ROOT}/config/analysis_profiles.json}"
 usage() {
   cat <<'USAGE'
 Uso: scripts/20_run_pipeline.sh [opções]
 Opções:
   --install                 instala dependências via apt-get (usa 00_check_env.sh)
-  --sample NOME             nome da amostra (padrão: SAMPLE_ID/SAMPLE_NAME/SAMPLE ou 81554_S150)
+  --sample NOME             nome da amostra (obrigatório se SAMPLE_ID/SAMPLE_NAME/SAMPLE não estiver definido)
   --kmer K                  k-mer para Velvet (padrão: VELVET_K ou 31)
-  --assembler NOME          montador: velvet, spades ou metaspades
+  --analysis-profile NOME   perfil: canonical-e1 ou assembly-consensus
+  --assembler NOME          montador manual: velvet, spades ou metaspades
   --threads N               número de threads (padrão: THREADS ou 4)
   --spades-params "PARAMS"  parâmetros extras para SPAdes/metaSPAdes
   --advanced-kmers LISTA    k-mers manuais, impares/crescentes e menores que as reads
@@ -152,7 +159,7 @@ Opções:
   --skip-host-filter        ignora o filtro do hospedeiro
   --skip-qc                 ignora o controle de qualidade com fastp
   --rescue-mode             força o resgate de reads se a montagem falhar ou contigs forem muito curtos
-  --evidence-v2             gera evidencia agregada 2.0 em shadow mode
+  --evidence-v2             gera evidência canônica 2.0 com teto E1
   --evidence-config ARQ     configuracao YAML estrita da evidencia 2.0
   --evidence-root DIR       raiz unica para staging, estado e runs Evidence 2.0
   --batch-manifest TSV      executa um lote por scripts/23_run_batch.sh
@@ -191,6 +198,7 @@ RESCUE_MODE=0
 SAMPLE_OVERRIDE=""
 KMER_OVERRIDE=""
 ASSEMBLER_OVERRIDE=""
+ANALYSIS_PROFILE_OVERRIDE=""
 THREADS_OVERRIDE=""
 SPADES_PARAMS_OVERRIDE=""
 ADVANCED_KMERS_OVERRIDE=""
@@ -219,6 +227,11 @@ while [[ $# -gt 0 ]]; do
     --assembler)
       require_value "$1" "${2:-}"
       ASSEMBLER_OVERRIDE="$2"
+      shift 2
+      ;;
+    --analysis-profile)
+      require_value "$1" "${2:-}"
+      ANALYSIS_PROFILE_OVERRIDE="$2"
       shift 2
       ;;
     --threads)
@@ -306,7 +319,11 @@ if [[ -n "$BATCH_MANIFEST" ]]; then
   exec "$SCRIPT_DIR/23_run_batch.sh" --batch-manifest "$BATCH_MANIFEST" --config "$EVIDENCE_CONFIG" \
     --evidence-root "$EVIDENCE_ROOT" --threads "${THREADS_OVERRIDE:-${THREADS:-4}}"
 fi
-SAMPLE_NAME="${SAMPLE_OVERRIDE:-${SAMPLE_NAME:-${SAMPLE:-amostra_teste}}}"
+SAMPLE_NAME="${SAMPLE_OVERRIDE:-${SAMPLE_NAME:-${SAMPLE:-}}}"
+if [[ -z "$SAMPLE_NAME" ]]; then
+  echo "[FATAL] informe --sample NOME ou defina SAMPLE_ID/SAMPLE_NAME/SAMPLE explicitamente" >&2
+  exit 2
+fi
 SAMPLE_NAME="$(python3 "${SCRIPT_DIR}/lib/input_validation.py" sample "$SAMPLE_NAME")"
 mkdir -p "${REPO_ROOT}/tmp"
 exec 8>"${REPO_ROOT}/tmp/${SAMPLE_NAME}.pipeline.lock"
@@ -323,6 +340,7 @@ fi
 SAFE_SAMPLE_NAME="${SAMPLE_NAME// /_}"
 VELVET_K="${KMER_OVERRIDE:-${VELVET_K:-31}}"
 ASSEMBLER="${ASSEMBLER_OVERRIDE:-${ASSEMBLER:-velvet}}"
+ANALYSIS_PROFILE="${ANALYSIS_PROFILE_OVERRIDE:-$ANALYSIS_PROFILE}"
 THREADS="${THREADS_OVERRIDE:-${THREADS:-4}}"
 SPADES_PARAMS="${SPADES_PARAMS_OVERRIDE:-${SPADES_PARAMS:-}}"
 ADVANCED_KMERS="${ADVANCED_KMERS_OVERRIDE:-${ADVANCED_KMERS:-}}"
@@ -332,13 +350,19 @@ fi
 if ! [[ "$VELVET_K" =~ ^[0-9]+$ ]] || (( VELVET_K < 15 || VELVET_K > 127 )); then
   log_fatal "VELVET_K invalido: $VELVET_K"
 fi
-: "${HOST_FILTER_ENABLED:=true}"
-: "${HOST_NAME:=Sus scrofa}"
-: "${HOST_ACCESSION:=GCF_000003025.6}"
-: "${HOST_INDEX_PREFIX:=${REPO_ROOT}/ref/host/sus_scrofa_bt2}"
-HOST_INDEX_PREFIX="$(resolve_path "$HOST_INDEX_PREFIX")"
-export HOST_INDEX_PREFIX HOST_NAME HOST_ACCESSION HOST_FILTER_ENABLED THREADS
-DB="${DB:-ptv}"
+: "${HOST_FILTER_ENABLED:=false}"
+: "${HOST_NAME:=}"
+: "${HOST_ACCESSION:=}"
+: "${HOST_INDEX_PREFIX:=}"
+: "${HOST_MIN_ALIGNMENT_RATE:=50}"
+: "${QC_MIN_LEN:=50}"
+: "${QC_MIN_QUAL:=20}"
+if [[ -n "$HOST_INDEX_PREFIX" ]]; then
+  HOST_INDEX_PREFIX="$(resolve_path "$HOST_INDEX_PREFIX")"
+fi
+export HOST_INDEX_PREFIX HOST_NAME HOST_ACCESSION HOST_FILTER_ENABLED HOST_MIN_ALIGNMENT_RATE
+export QC_MIN_LEN QC_MIN_QUAL THREADS
+DB="${DB:-custom}"
 BLAST_TASK="${BLAST_TASK_OVERRIDE:-${BLAST_TASK:-blastn}}"
 BLAST_WORD_SIZE="${BLAST_WORD_SIZE_OVERRIDE:-${BLAST_WORD_SIZE:-11}}"
 BLAST_EVALUE="${BLAST_EVALUE_OVERRIDE:-${BLAST_EVALUE:-1e-5}}"
@@ -348,8 +372,21 @@ INPUT_MODE="READS"
 export SAMPLE_NAME
 export PIPELINE_ETAPA="QC_PREFLIGHT"
 
-if [[ "$ASSEMBLER" != "velvet" && "$ASSEMBLER" != "spades" && "$ASSEMBLER" != "metaspades" ]]; then
-  log_fatal "ASSEMBLER invalido: $ASSEMBLER — Use velvet, spades ou metaspades."
+python3 "${SCRIPT_DIR}/analysis_profiles.py" \
+  --config "$ANALYSIS_PROFILES_CONFIG" --profile "$ANALYSIS_PROFILE" >/dev/null || \
+  log_fatal "ANALYSIS_PROFILE inválido: $ANALYSIS_PROFILE"
+ANALYSIS_STRATEGY="$(
+  python3 "${SCRIPT_DIR}/analysis_profiles.py" \
+    --config "$ANALYSIS_PROFILES_CONFIG" --profile "$ANALYSIS_PROFILE" --field strategy
+)"
+if [[ "$ANALYSIS_STRATEGY" == "consensus" ]]; then
+  if [[ -n "$ASSEMBLER_OVERRIDE" ]]; then
+    log_fatal "--assembler não pode ser combinado com o perfil assembly-consensus."
+  fi
+  ASSEMBLER="consensus"
+fi
+if [[ "$ASSEMBLER" != "velvet" && "$ASSEMBLER" != "spades" && "$ASSEMBLER" != "metaspades" && "$ASSEMBLER" != "consensus" ]]; then
+  log_fatal "ASSEMBLER invalido: $ASSEMBLER — Use velvet, spades, metaspades ou assembly-consensus."
 fi
 if [[ "$BLAST_TASK" != "blastn" && "$BLAST_TASK" != "blastn-short" ]]; then
   log_fatal "BLAST_TASK invalido: $BLAST_TASK — Use blastn ou blastn-short."
@@ -359,6 +396,9 @@ if [[ $SKIP_ASSEMBLY -eq 1 && -z "$CONTIGS" ]]; then
 fi
 BLAST_DB="$(resolve_path "${BLAST_DB:-blastdb/${DB}}")"
 RAW_DIR="$(resolve_path "${RAW_DIR:-data/raw}")"
+QC_OUT_DIR="$(resolve_path "${QC_OUT_DIR:-data/cleaned}")"
+QC_REPORT_DIR="$(resolve_path "${QC_REPORT_DIR:-results/qc}")"
+HOST_REMOVED_DIR="$(resolve_path "${HOST_REMOVED_DIR:-data/host_removed}")"
 SAMPLE_R1="${SAMPLE_R1:-}"
 SAMPLE_R2="${SAMPLE_R2:-}"
 SAMPLE_SINGLE="${SAMPLE_SINGLE:-}"
@@ -408,11 +448,13 @@ mkdir -p "$LOG_DIR"
 PIPELINE_LOG="${LOG_DIR}/${SAMPLE_NAME}_pipeline.log"
 exec > >(tee -a "$PIPELINE_LOG") 2>&1
 echo "=== Pipeline iniciado em $(date -Iseconds) ==="
-echo "    Amostra: ${SAMPLE_NAME}  Assembler: ${ASSEMBLER}  DB: ${DB:-ptv}"
+echo "    Amostra: ${SAMPLE_NAME}  Perfil: ${ANALYSIS_PROFILE}  Assembler: ${ASSEMBLER}  DB: ${DB:-custom}"
 echo "=============================================="
 
 export SAMPLE_ID SAMPLE_NAME SAMPLE_R1 SAMPLE_R2 SAMPLE_SINGLE RAW_DIR INPUT_MODE
+export QC_OUT_DIR QC_REPORT_DIR HOST_REMOVED_DIR
 export ASSEMBLER THREADS SPADES_PARAMS VELVET_K
+export ANALYSIS_PROFILE ANALYSIS_PROFILES_CONFIG
 export ADVANCED_KMERS
 export BLAST_TASK BLAST_WORD_SIZE BLAST_EVALUE
 export CONTIGS SKIP_ASSEMBLY SKIP_QC SKIP_HOST_FILTER RESCUE_MODE HOST_INDEX_PREFIX HOST_NAME HOST_ACCESSION HOST_FILTER_ENABLED
@@ -514,6 +556,7 @@ if [[ -n "$ADVANCED_KMERS" ]]; then
 fi
 evidence_state_stage input_validation "done" "Entrada e parâmetros do pipeline validados."
 echo "Amostra: $SAMPLE_NAME"
+echo "Analysis profile: $ANALYSIS_PROFILE"
 echo "Assembler: $ASSEMBLER"
 echo "Threads: $THREADS"
 echo "SPADES_PARAMS: ${SPADES_PARAMS:-<vazio>}"
@@ -544,64 +587,86 @@ fi
 
 # ── Etapa 2.5: QC com fastp (antes da filtragem de hospedeiro e montagem) ────
 evidence_state_stage quality_control running "Executando ou avaliando o controle de qualidade do fluxo 1.1."
-if [[ $SKIP_QC -eq 0 && -z "$SAMPLE_SINGLE" && -z "$CONTIGS" ]]; then
-  if command -v fastp >/dev/null 2>&1; then
-    log "[2.5/6] Controle de qualidade (fastp)"
-    "$SCRIPT_DIR/02_qc_fastp.sh" "$SAMPLE_NAME" "$THREADS"
-    # Reatribuir reads para as versões limpas
-    CLEANED_R1="${REPO_ROOT}/data/cleaned/${SAMPLE_NAME}_R1.clean.fastq.gz"
-    CLEANED_R2="${REPO_ROOT}/data/cleaned/${SAMPLE_NAME}_R2.clean.fastq.gz"
-    if [[ -s "$CLEANED_R1" && -s "$CLEANED_R2" ]]; then
-      SAMPLE_R1="$CLEANED_R1"
-      SAMPLE_R2="$CLEANED_R2"
-      export SAMPLE_R1 SAMPLE_R2
-      echo "[INFO] Reads de entrada atualizados para versões limpas pelo fastp."
-    else
-      echo "[AVISO] fastp não gerou reads limpos válidos; usando reads originais."
-    fi
+QC_STATUS="not_applicable"
+QC_JSON_REPORT=""
+if [[ $SKIP_QC -eq 0 && -z "$CONTIGS" ]]; then
+  command -v fastp >/dev/null 2>&1 || log_fatal "fastp não encontrado; instale a dependência ou use --skip-qc explicitamente."
+  log "[2.5/6] Controle de qualidade (fastp)"
+  "$SCRIPT_DIR/02_qc_fastp.sh" "$SAMPLE_NAME" "$THREADS"
+  QC_JSON_REPORT="${QC_REPORT_DIR}/${SAMPLE_NAME}_fastp.json"
+  if [[ -n "$SAMPLE_SINGLE" ]]; then
+    CLEANED_SINGLE="${QC_OUT_DIR}/${SAMPLE_NAME}.clean.fastq.gz"
+    [[ -s "$CLEANED_SINGLE" && -s "$QC_JSON_REPORT" ]] || log_fatal "fastp não gerou FASTQ single-end e relatório válidos."
+    SAMPLE_SINGLE="$CLEANED_SINGLE"
+    export SAMPLE_SINGLE
+    echo "[INFO] Read single-end atualizada para a versão limpa pelo fastp."
   else
-    echo "[AVISO] fastp não encontrado — etapa de QC ignorada."
-    echo "        Para ativar: sudo apt install -y fastp"
-    echo "        Para suprimir este aviso: use --skip-qc"
+    CLEANED_R1="${QC_OUT_DIR}/${SAMPLE_NAME}_R1.clean.fastq.gz"
+    CLEANED_R2="${QC_OUT_DIR}/${SAMPLE_NAME}_R2.clean.fastq.gz"
+    [[ -s "$CLEANED_R1" && -s "$CLEANED_R2" && -s "$QC_JSON_REPORT" ]] || log_fatal "fastp não gerou o par FASTQ e relatório válidos."
+    SAMPLE_R1="$CLEANED_R1"
+    SAMPLE_R2="$CLEANED_R2"
+    export SAMPLE_R1 SAMPLE_R2
+    echo "[INFO] Reads pareadas atualizadas para versões limpas pelo fastp."
   fi
+  QC_STATUS="completed"
 else
   log "[2.5/6] Controle de qualidade (fastp) ignorado"
+  [[ $SKIP_QC -eq 1 ]] && QC_STATUS="explicitly_skipped"
 fi
 evidence_state_stage quality_control "done" "Controle de qualidade concluído ou explicitamente ignorado."
 
 HOST_FILTER_DISABLED=0
 case "${HOST_FILTER_ENABLED,,}" in
-  false|0|no|nao) HOST_FILTER_DISABLED=1 ;;
+  false|0|no|nao)
+    HOST_FILTER_ENABLED=false
+    HOST_FILTER_DISABLED=1
+    ;;
+  true|1|yes|sim)
+    HOST_FILTER_ENABLED=true
+    ;;
+  *)
+    log_fatal "HOST_FILTER_ENABLED inválido: use true/false (ou 1/0, yes/no, sim/nao)."
+    ;;
 esac
+export HOST_FILTER_ENABLED
 
-if [[ $SKIP_HOST_FILTER -eq 0 && $HOST_FILTER_DISABLED -eq 0 ]]; then
+HOST_FILTER_STATUS="not_applicable"
+HOST_FILTER_LOG=""
+if [[ $SKIP_HOST_FILTER -eq 0 && $HOST_FILTER_DISABLED -eq 0 && "$INPUT_MODE" == "READS" ]]; then
   log "[3/6] Filtrando hospedeiro (opcional)"
+  [[ -n "$HOST_NAME" ]] || log_fatal "HOST_FILTER_ENABLED=true exige HOST_NAME explícito."
+  [[ -n "$HOST_INDEX_PREFIX" ]] || log_fatal "HOST_FILTER_ENABLED=true exige HOST_INDEX_PREFIX explícito."
+  resolve_bt2_index "$HOST_INDEX_PREFIX" >/dev/null || \
+    log_fatal "Índice completo do hospedeiro '${HOST_NAME}' não encontrado ou inválido em ${HOST_INDEX_PREFIX}."
+  "$SCRIPT_DIR/03_filter_host.sh" "$SAMPLE_NAME"
+  HOST_FILTER_LOG="${HOST_REMOVED_DIR}/${SAMPLE_NAME}_host_filter_bowtie2.log"
   if [[ -n "$SAMPLE_SINGLE" ]]; then
-    echo "[AVISO] Filtro do hospedeiro ignora amostras single-end. Use --skip-host-filter para silenciar." >&2
+    FILTERED_SINGLE="${HOST_REMOVED_DIR}/${SAMPLE_NAME}.host_removed.fastq.gz"
+    [[ -s "$FILTERED_SINGLE" ]] || log_fatal "Filtro de hospedeiro não gerou FASTQ single-end válido."
+    SAMPLE_SINGLE="$FILTERED_SINGLE"
+    export SAMPLE_SINGLE
+    echo "[INFO] Read single-end atualizada para a versão sem alinhamento ao hospedeiro."
   else
-    if resolve_bt2_index "$HOST_INDEX_PREFIX" >/dev/null; then
-      "$SCRIPT_DIR/03_filter_host.sh" "$SAMPLE_NAME"
-      # Reatribuir reads para as versões com hospedeiro removido
-      FILTERED_R1="${REPO_ROOT}/data/host_removed/${SAMPLE_NAME}_R1.host_removed.fastq.gz"
-      FILTERED_R2="${REPO_ROOT}/data/host_removed/${SAMPLE_NAME}_R2.host_removed.fastq.gz"
-      if [[ -s "$FILTERED_R1" && -s "$FILTERED_R2" ]]; then
-        SAMPLE_R1="$FILTERED_R1"
-        SAMPLE_R2="$FILTERED_R2"
-        export SAMPLE_R1 SAMPLE_R2
-        echo "[INFO] Reads de entrada atualizados para versões com hospedeiro removido."
-      else
-        echo "[AVISO] 03_filter_host.sh não gerou reads válidos; usando reads da etapa anterior."
-      fi
-    else
-      echo "[AVISO] Indice completo do hospedeiro (${HOST_NAME}) nao encontrado no prefixo ${HOST_INDEX_PREFIX} (.bt2 ou .bt2l)"
-      echo "        Se quiser rodar o filtro de hospedeiro, execute scripts/11_prepare_host_reference.sh"
-      echo "        ou ajuste HOST_INDEX_PREFIX para um indice Bowtie2 valido."
-    fi
+    FILTERED_R1="${HOST_REMOVED_DIR}/${SAMPLE_NAME}_R1.host_removed.fastq.gz"
+    FILTERED_R2="${HOST_REMOVED_DIR}/${SAMPLE_NAME}_R2.host_removed.fastq.gz"
+    [[ -s "$FILTERED_R1" && -s "$FILTERED_R2" ]] || log_fatal "Filtro de hospedeiro não gerou o par FASTQ válido."
+    SAMPLE_R1="$FILTERED_R1"
+    SAMPLE_R2="$FILTERED_R2"
+    export SAMPLE_R1 SAMPLE_R2
+    echo "[INFO] Reads pareadas atualizadas para versões em que ambos os mates não alinharam ao hospedeiro."
   fi
+  HOST_FILTER_STATUS="completed"
 else
   log "[3/6] Filtro do hospedeiro ignorado"
-  if [[ $HOST_FILTER_DISABLED -eq 1 ]]; then
+  if [[ "$INPUT_MODE" != "READS" ]]; then
+    echo "[INFO] Entrada por contigs; filtro de hospedeiro não se aplica."
+    HOST_FILTER_STATUS="not_applicable"
+  elif [[ $HOST_FILTER_DISABLED -eq 1 ]]; then
     echo "[INFO] HOST_FILTER_ENABLED=false; reads seguem sem etapa Bowtie2 de hospedeiro."
+    HOST_FILTER_STATUS="disabled_no_host_declared"
+  elif [[ $SKIP_HOST_FILTER -eq 1 ]]; then
+    HOST_FILTER_STATUS="explicitly_skipped"
   fi
 fi
 evidence_state_stage assembly running "Montagem em execução; SPAdes usa k-mers automáticos por padrão."
@@ -618,6 +683,8 @@ if [[ -n "$CONTIGS" ]]; then
     echo "ASSEMBLER_USED=\"provided\""
     echo "ASSEMBLY_FALLBACK=0"
     echo "ASSEMBLY_FAILURE_TYPE=\"NONE\""
+    echo "ANALYSIS_PROFILE=\"${ANALYSIS_PROFILE}\""
+    echo "ASSEMBLY_STRATEGY=\"provided\""
     echo "RESCUE_TRIGGERED=0"
     echo "INPUT_MODE=\"CONTIGS\""
   } > "$METADATA_FILE"
@@ -639,6 +706,10 @@ else
     mkdir -p "$(dirname "${ASSEMBLY_CONTIGS}")"
     touch "${ASSEMBLY_CONTIGS}"
   fi
+fi
+ASSEMBLY_CONSENSUS_MANIFEST="${REPO_ROOT}/data/assemblies/${SAMPLE_NAME}_assembly/assembly_consensus.json"
+if [[ "$ANALYSIS_PROFILE" != "assembly-consensus" || ! -s "$ASSEMBLY_CONSENSUS_MANIFEST" ]]; then
+  ASSEMBLY_CONSENSUS_MANIFEST=""
 fi
 evidence_state_stage assembly "done" "Montagem concluída ou contigs fornecidos validados."
 
@@ -724,7 +795,8 @@ if [[ $TRIGGER_RESCUE -eq 1 && "$INPUT_MODE" == "READS" ]]; then
   echo "[INFO] Executando resgate de leituras..."
   RESCUE_FA="${REPO_ROOT}/data/assemblies/${SAMPLE_NAME}_assembly/rescue_reads.fa"
   mkdir -p "$(dirname "${RESCUE_FA}")"
-  rm -f "$RESCUE_FA"
+  RESCUE_FA_TMP="${RESCUE_FA}.tmp.$$"
+  : > "$RESCUE_FA_TMP"
 
   cat_fastq_to_fasta() {
     local infile="$1"
@@ -764,14 +836,22 @@ if [[ $TRIGGER_RESCUE -eq 1 && "$INPUT_MODE" == "READS" ]]; then
   }
 
   if [[ -n "${SAMPLE_SINGLE:-}" && -s "$SAMPLE_SINGLE" ]]; then
-    cat_fastq_to_fasta "$SAMPLE_SINGLE" "$RESCUE_FA"
+    cat_fastq_to_fasta "$SAMPLE_SINGLE" "$RESCUE_FA_TMP"
   else
     if [[ -n "${SAMPLE_R1:-}" && -s "$SAMPLE_R1" ]]; then
-      cat_fastq_to_fasta "$SAMPLE_R1" "$RESCUE_FA" "1"
+      cat_fastq_to_fasta "$SAMPLE_R1" "$RESCUE_FA_TMP" "1"
     fi
     if [[ -n "${SAMPLE_R2:-}" && -s "$SAMPLE_R2" ]]; then
-      cat_fastq_to_fasta "$SAMPLE_R2" "$RESCUE_FA" "2"
+      cat_fastq_to_fasta "$SAMPLE_R2" "$RESCUE_FA_TMP" "2"
     fi
+  fi
+
+  if [[ -s "$RESCUE_FA_TMP" ]]; then
+    python3 "${SCRIPT_DIR}/lib/input_validation.py" fasta "$RESCUE_FA_TMP" >/dev/null || \
+      log_fatal "FASTA temporario de resgate invalido."
+    mv -f "$RESCUE_FA_TMP" "$RESCUE_FA"
+  else
+    rm -f "$RESCUE_FA_TMP"
   fi
 
   if [[ -s "$RESCUE_FA" ]]; then
@@ -784,10 +864,11 @@ if [[ $TRIGGER_RESCUE -eq 1 && "$INPUT_MODE" == "READS" ]]; then
       --provenance "${RESCUE_RAW_OUT%.tsv}_provenance.json"
 
     python3 "${SCRIPT_DIR}/filter_rescue_reads.py" --blast-raw "$RESCUE_RAW_OUT" --out-tsv "$RESCUE_FINAL_OUT"
-    rm -f "$RESCUE_RAW_OUT"
     # Atualiza metadados indicando que o resgate foi ativado com sucesso
     if [[ -f "${METADATA_FILE:-}" ]]; then
-      sed -i 's/RESCUE_TRIGGERED=0/RESCUE_TRIGGERED=1/' "${METADATA_FILE}" 2>/dev/null || true
+      METADATA_UPDATED="${METADATA_FILE}.tmp.$$"
+      sed 's/RESCUE_TRIGGERED=0/RESCUE_TRIGGERED=1/' "${METADATA_FILE}" > "$METADATA_UPDATED" && \
+        mv -f "$METADATA_UPDATED" "${METADATA_FILE}" || rm -f "$METADATA_UPDATED"
     fi
   else
     echo "[AVISO] Nenhuma read de entrada válida encontrada para o resgate."
@@ -797,6 +878,7 @@ fi
 case "$ASSEMBLER" in
   velvet)     OUT="${OUTDIR}/${SAMPLE_NAME}_k${VELVET_K}_vs_db.tsv" ;;
   metaspades) OUT="${OUTDIR}/${SAMPLE_NAME}_metaspades_vs_db.tsv" ;;
+  consensus)  OUT="${OUTDIR}/${SAMPLE_NAME}_assembly_consensus_vs_db.tsv" ;;
   *)          OUT="${OUTDIR}/${SAMPLE_NAME}_spades_vs_db.tsv" ;;
 esac
 
@@ -827,8 +909,15 @@ case "${EVIDENCE_V2,,}" in
       --sample "$SAMPLE_NAME" --queries "$ASSEMBLY_CONTIGS"
       --config "$EVIDENCE_CONFIG" --evidence-root "$EVIDENCE_ROOT"
       --library-mode "$EVIDENCE_LIBRARY_MODE" --umi-mode "$EVIDENCE_UMI_MODE" --threads "$THREADS"
+      --qc-status "$QC_STATUS" --host-filter-status "$HOST_FILTER_STATUS"
+      --qc-min-length "$QC_MIN_LEN" --qc-min-quality "$QC_MIN_QUAL"
     )
+    DATABASE_MANIFEST="${BLAST_DB}.db-manifest.json"
     EVIDENCE_ARGS+=(--role "$EVIDENCE_ROLE")
+    [[ -z "$ASSEMBLY_CONSENSUS_MANIFEST" ]] || \
+      EVIDENCE_ARGS+=(--assembly-manifest "$ASSEMBLY_CONSENSUS_MANIFEST")
+    [[ -z "$QC_JSON_REPORT" ]] || EVIDENCE_ARGS+=(--qc-report "$QC_JSON_REPORT")
+    [[ -z "$HOST_FILTER_LOG" ]] || EVIDENCE_ARGS+=(--host-filter-log "$HOST_FILTER_LOG")
     [[ -z "$EVIDENCE_EXPECTED_TARGET" ]] || EVIDENCE_ARGS+=(--expected-target "$EVIDENCE_EXPECTED_TARGET")
     [[ -z "$EVIDENCE_RUN_ID" ]] || EVIDENCE_ARGS+=(--run-id "$EVIDENCE_RUN_ID")
     [[ -z "$EVIDENCE_BATCH_ID" ]] || EVIDENCE_ARGS+=(--batch-id "$EVIDENCE_BATCH_ID")
@@ -837,20 +926,26 @@ case "${EVIDENCE_V2,,}" in
       [[ -z "$EVIDENCE_SUBJECT_LABELS" ]] || EVIDENCE_ARGS+=(--subject-labels "$EVIDENCE_SUBJECT_LABELS")
       [[ -z "$EVIDENCE_PANEL_FASTA" ]] || EVIDENCE_ARGS+=(--panel-fasta "$EVIDENCE_PANEL_FASTA")
       [[ -z "$EVIDENCE_PANEL_INDEX" ]] || EVIDENCE_ARGS+=(--panel-index "$EVIDENCE_PANEL_INDEX")
-      if [[ "$INPUT_MODE" == "READS" && -n "${SAMPLE_R1:-}" && -n "${SAMPLE_R2:-}" ]]; then
-        EVIDENCE_ARGS+=(--r1 "$SAMPLE_R1" --r2 "$SAMPLE_R2")
-      fi
     else
       EVIDENCE_ARGS+=(--blast "${BLAST_TASK}=${OUT}")
+      EVIDENCE_ARGS+=(--database-manifest "$DATABASE_MANIFEST")
+    fi
+    if [[ "$INPUT_MODE" == "READS" ]]; then
+      if [[ -n "${SAMPLE_SINGLE:-}" ]]; then
+        EVIDENCE_ARGS+=(--single "$SAMPLE_SINGLE")
+      elif [[ -n "${SAMPLE_R1:-}" && -n "${SAMPLE_R2:-}" ]]; then
+        EVIDENCE_ARGS+=(--r1 "$SAMPLE_R1" --r2 "$SAMPLE_R2")
+      fi
     fi
     if ! "$SCRIPT_DIR/22_run_evidence_v2.sh" "${EVIDENCE_ARGS[@]}"; then
-      log_warning "Evidencia 2.0 shadow falhou; a conclusao 1.1 foi preservada."
+      log_warning "Evidência 2.0 E1 falhou; a execução foi marcada como não avaliável."
     fi
     ;;
 esac
 echo "Resumo salvo em: $REPORT"
 log "[6/6] Pipeline concluído"
 echo "Amostra: $SAMPLE_NAME"
+echo "Perfil: $ANALYSIS_PROFILE"
 echo "Assembler: $ASSEMBLER"
 echo "Contigs: $ASSEMBLY_CONTIGS"
 echo "BLAST: $OUT"

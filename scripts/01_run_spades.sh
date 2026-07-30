@@ -13,8 +13,10 @@ INCOMING_ASSEMBLER="${ASSEMBLER:-}"
 
 if [[ "${PIPELINE_CONFIG_LOADED:-0}" != "1" ]]; then
   if [[ -f "${CONFIG_FILE}" ]]; then
+    # shellcheck disable=SC1090
     source "${CONFIG_FILE}"
   elif [[ -f "${LEGACY_CONFIG}" ]]; then
+    # shellcheck disable=SC1090
     source "${LEGACY_CONFIG}"
   fi
 fi
@@ -36,13 +38,23 @@ if [[ -z "${FRAGMENT_HUNTER_KEEP_ALL_KMERS:-}" ]]; then
 fi
 FRAGMENT_HUNTER_KEEP_ALL_KMERS="${FRAGMENT_HUNTER_KEEP_ALL_KMERS:-false}"
 
+# shellcheck disable=SC1091
 source "${SCRIPT_DIR}/lib/common.sh"
 
 SAMPLE="${1:?SAMPLE obrigatório}"
 THREADS="${2:-4}"
 SAMPLE="$(python3 "${SCRIPT_DIR}/lib/input_validation.py" sample "$SAMPLE")"
 SPADES_PARAMS="${3:-${SPADES_PARAMS:-}}"
+read -r -a SPADES_ARGS <<< "$SPADES_PARAMS"
 SPADES_MODE="${4:-${ASSEMBLER:-spades}}"
+SPADES_MODE="${SPADES_MODE,,}"
+case "$SPADES_MODE" in
+  spades|metaspades) ;;
+  *) log_error "SPADES_MODE invalido: '$SPADES_MODE'. Use spades ou metaspades." ;;
+esac
+if ! [[ "$THREADS" =~ ^[1-9][0-9]*$ ]]; then
+  log_error "THREADS deve ser um inteiro positivo: '$THREADS'."
+fi
 
 # Forçar offset 33 para dados sintéticos do pipeline para evitar falhas do auto-detector
 if [[ "$SAMPLE" == "DEMO" || "$SAMPLE" == "nohits" ]]; then
@@ -61,7 +73,6 @@ fi
 
 if [[ " ${SPADES_PARAMS} " =~ [[:space:]](-m|--memory)[[:space:]\=]([0-9]+) ]]; then
   spades_mem="${BASH_REMATCH[2]}"
-  spades_flag="${BASH_REMATCH[1]}"
   if (( spades_mem > ram_gb )); then
     safe_mem=$(( ram_gb * 80 / 100 ))
     if (( safe_mem < 4 )); then
@@ -113,10 +124,19 @@ RAW_SINGLE="${SAMPLE_SINGLE:-${SINGLE:-${FASTQ_SINGLE:-}}}"
 RAW1="${R1:-${READ1:-${FASTQ_R1:-}}}"
 RAW2="${R2:-${READ2:-${FASTQ_R2:-}}}"
 
+if [[ -n "$RAW_SINGLE" && ( -n "$RAW1" || -n "$RAW2" ) ]]; then
+  log_error "Use entrada single-end ou paired-end, nunca ambas."
+fi
 if [[ -n "${RAW_SINGLE}" ]]; then
-  check_file "$RAW_SINGLE"
+  RAW_SINGLE="$(resolve_path "$RAW_SINGLE")"
+  if [[ "$SPADES_MODE" == "metaspades" ]]; then
+    log_error "metaSPAdes requer uma biblioteca curta paired-end; single-end nao e suportado."
+  fi
+  python3 "${SCRIPT_DIR}/lib/input_validation.py" fastq "$RAW_SINGLE" >/dev/null || exit 2
 else
-  if [[ -z "${RAW1}" || -z "${RAW2}" ]]; then
+  if [[ -n "$RAW1" || -n "$RAW2" ]]; then
+    [[ -n "$RAW1" && -n "$RAW2" ]] || log_error "R1 e R2 devem ser informados juntos."
+  else
     RAW1="$(find_read "$SAMPLE" "$RAW_DIR" "R1")"
     RAW2="$(find_read "$SAMPLE" "$RAW_DIR" "R2")"
   fi
@@ -132,16 +152,13 @@ Alternativa (recomendado):
 Para single-end:
   SAMPLE_SINGLE=/caminho/reads.fastq.gz make pipeline SAMPLE=$SAMPLE"
   fi
+  RAW1="$(resolve_path "$RAW1")"
+  RAW2="$(resolve_path "$RAW2")"
+  python3 "${SCRIPT_DIR}/lib/input_validation.py" fastq "$RAW1" --mate "$RAW2" >/dev/null || exit 2
 fi
 
 command -v spades.py >/dev/null 2>&1 || log_error $'spades.py não encontrado no PATH.\nUbuntu/WSL: sudo apt update && sudo apt install -y spades'
 
-if [[ -z "${RAW_SINGLE}" ]]; then
-  check_file "$RAW1"
-  check_file "$RAW2"
-fi
-
-mkdir -p "$OUTDIR"
 log_info "[SPAdes] sample=$SAMPLE"
 if [[ -n "${RAW_SINGLE}" ]]; then
   log_info "[SPAdes] SINGLE=$RAW_SINGLE"
@@ -181,7 +198,7 @@ if [[ -n "${RAW_SINGLE}" ]]; then
     -t "$THREADS" \
     $META_FLAG \
     ${HAMMER_BYPASS:-} \
-    $SPADES_PARAMS
+    "${SPADES_ARGS[@]}"
 else
   ln -sf "$(realpath "$RAW1")" "$SPADES_TMP_DIR/r1.fastq.gz"
   ln -sf "$(realpath "$RAW2")" "$SPADES_TMP_DIR/r2.fastq.gz"
@@ -193,16 +210,30 @@ else
     -t "$THREADS" \
     $META_FLAG \
     ${HAMMER_BYPASS:-} \
-    $SPADES_PARAMS
+    "${SPADES_ARGS[@]}"
 fi
 
-# Copiar os resultados de volta para a pasta real do Gene-In
-if [[ -f "$SPADES_TMP_OUT/contigs.fasta" ]]; then
-  mkdir -p "$OUTDIR"
-  cp -f "$SPADES_TMP_OUT/contigs.fasta" "$OUTDIR/contigs.fasta"
-  # Copiar outros arquivos úteis se existirem
-  [[ -f "$SPADES_TMP_OUT/scaffolds.fasta" ]] && cp -f "$SPADES_TMP_OUT/scaffolds.fasta" "$OUTDIR/scaffolds.fasta" 2>/dev/null || true
-  [[ -f "$SPADES_TMP_OUT/spades.log" ]] && cp -f "$SPADES_TMP_OUT/spades.log" "$OUTDIR/spades.log" 2>/dev/null || true
+# Validate this attempt, not a same-sample artifact left by an older run.
+check_file "$SPADES_TMP_OUT/contigs.fasta"
+python3 "${SCRIPT_DIR}/lib/input_validation.py" fasta "$SPADES_TMP_OUT/contigs.fasta" >/dev/null || \
+  log_error "SPAdes gerou contigs.fasta invalido."
+
+# Publish FASTA artifacts atomically. A failed attempt leaves the last complete
+# assembler output untouched, while the router will never attribute it to the
+# failed attempt because it checks the child exit status first.
+mkdir -p "$OUTDIR"
+CONTIGS_TMP="$(mktemp "${OUTDIR}/.contigs.fasta.XXXXXX")"
+cp -f "$SPADES_TMP_OUT/contigs.fasta" "$CONTIGS_TMP"
+mv -f "$CONTIGS_TMP" "$OUTDIR/contigs.fasta"
+if [[ -f "$SPADES_TMP_OUT/scaffolds.fasta" ]]; then
+  SCAFFOLDS_TMP="$(mktemp "${OUTDIR}/.scaffolds.fasta.XXXXXX")"
+  cp -f "$SPADES_TMP_OUT/scaffolds.fasta" "$SCAFFOLDS_TMP"
+  mv -f "$SCAFFOLDS_TMP" "$OUTDIR/scaffolds.fasta"
+fi
+if [[ -f "$SPADES_TMP_OUT/spades.log" ]]; then
+  SPADES_LOG_TMP="$(mktemp "${OUTDIR}/.spades.log.XXXXXX")"
+  cp -f "$SPADES_TMP_OUT/spades.log" "$SPADES_LOG_TMP"
+  mv -f "$SPADES_LOG_TMP" "$OUTDIR/spades.log"
 fi
 
 # Preservação de contigs por k-mer intermediários
@@ -234,6 +265,7 @@ if [[ "${FRAGMENT_HUNTER_KEEP_ALL_KMERS:-false}" == "true" ]]; then
     else
       SINGLE_K_PARAMS="${SPADES_PARAMS} -k ${k}"
     fi
+    read -r -a SINGLE_K_ARGS <<< "$SINGLE_K_PARAMS"
 
     # Criar pasta temporária single-k
     K_TMP_DIR="${SPADES_TMP_DIR}/single_k_${k}"
@@ -251,7 +283,7 @@ if [[ "${FRAGMENT_HUNTER_KEEP_ALL_KMERS:-false}" == "true" ]]; then
         -t "$THREADS" \
         $META_FLAG \
         ${HAMMER_BYPASS:-} \
-        $SINGLE_K_PARAMS > "$K_STDOUT" 2> "$K_STDERR"
+        "${SINGLE_K_ARGS[@]}" > "$K_STDOUT" 2> "$K_STDERR"
     else
       spades.py \
         -1 "$SPADES_TMP_DIR/r1.fastq.gz" \
@@ -260,7 +292,7 @@ if [[ "${FRAGMENT_HUNTER_KEEP_ALL_KMERS:-false}" == "true" ]]; then
         -t "$THREADS" \
         $META_FLAG \
         ${HAMMER_BYPASS:-} \
-        $SINGLE_K_PARAMS > "$K_STDOUT" 2> "$K_STDERR"
+        "${SINGLE_K_ARGS[@]}" > "$K_STDOUT" 2> "$K_STDERR"
     fi
     K_RC=$?
     set -e
@@ -285,9 +317,6 @@ if [[ "${FRAGMENT_HUNTER_KEEP_ALL_KMERS:-false}" == "true" ]]; then
     fi
   done
 fi
-
-# Limpar arquivos temporários curtos
-rm -rf "$SPADES_TMP_DIR"
 
 check_file "$OUTDIR/contigs.fasta"
 

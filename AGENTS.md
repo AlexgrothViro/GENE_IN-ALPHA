@@ -1,6 +1,14 @@
-# Gene-In — invariantes para engenharia assistida
+# Gene-In — invariantes para engenharia
 
 Este arquivo orienta agentes e ferramentas de programação. Ele não delega autoridade científica.
+
+## Missão e precedência
+
+O objetivo canônico é analisar e recuperar fragmentos virais curtos em dados de NGS/metagenômica. A escada científica `E1 → E2 → E3 → E4` organiza o que cada resultado permite afirmar.
+
+Perfis PTV/picornavírus, amostras suínas, exemplos do README, bancos de demonstração e a configuração Alpha.2 são contextos ou estados específicos; não restringem o Gene-In a um vírus, hospedeiro ou banco.
+
+Precedência: contrato científico e missão do projeto → política/schema versionados → estado da versão → testes/implementação → documentação auxiliar → skills e prompts. Nenhuma skill, prompt ou arquivo de orientação pode substituir esta hierarquia.
 
 ## Invariantes científicas
 
@@ -17,14 +25,14 @@ Este arquivo orienta agentes e ferramentas de programação. Ele não delega aut
 - Nunca reutilize staging ou artefatos sem marcador de sucesso. Preserve a última execução válida até a promoção completa da próxima.
 - Use escrita temporária e promoção atômica para estado, manifestos, índices, BAM/BAI, TSV, JSON, FASTA e relatórios.
 - Valide IDs, schemas, caminhos, FASTQ/FASTA, BAM/BAI e enums antes de executar ferramentas externas.
-- Não adicione dependências sem entrada e decisão no `docs/TECHNOLOGY_RADAR.md`.
+- Não adicione dependências sem entrada e decisão no `docs/science/technology-radar.md`.
 - Não execute automaticamente código obtido de repositórios públicos durante avaliação tecnológica.
 - Não faça migrações irreversíveis ou operações destrutivas sem autorização e registro.
 - Toda mudança deve ter testes determinísticos proporcionais ao risco. Mocks não equivalem a validação com ferramenta real.
 
-## Registro de contribuição assistida por IA
+## Registro de contribuição
 
-PR ou change log deve registrar: ferramenta, escopo, arquivos afetados, testes executados, revisão humana e declaração sobre limiares científicos. IA pode sugerir e implementar código revisável, mas não aprova adoção tecnológica ou científica.
+PR ou change log deve registrar: escopo, arquivos afetados, testes executados, revisão responsável e declaração sobre limiares científicos. Nenhuma contribuição substitui a revisão técnica e científica nem aprova sozinha adoção tecnológica ou científica.
 
 ## Verificação mínima
 

@@ -10,8 +10,9 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from input_validation import validate_fastq, validate_sample_id
-from common import validate_evidence_config
+from input_validation import validate_batch_id, validate_fastq, validate_run_id, validate_sample_id
+from common import fsync_directory, replace_atomic, validate_evidence_config
+from activation_policy import load_activation_policy
 from evidence_contract import PIPELINE_VERSION, promote_for_public_output
 from validate_run_artifacts import validate, validate_commit_metadata
 
@@ -79,7 +80,10 @@ def atomic_text(path: Path, content: str) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
             handle.write(content)
-        os.replace(tmp_name, path)
+            handle.flush()
+            os.fsync(handle.fileno())
+        replace_atomic(tmp_name, path)
+        fsync_directory(path.parent)
     finally:
         if os.path.exists(tmp_name):
             os.unlink(tmp_name)
@@ -99,7 +103,9 @@ class EvidenceDashboardService:
 
     def _safe_id(self, value: str, label: str = "id") -> str:
         value = (value or "").strip()
-        if not value or len(value) > 128 or not all(ch.isalnum() or ch in "._-" for ch in value):
+        if label == "run_id":
+            return validate_run_id(value)
+        if not value or len(value) > 128 or not value.isascii() or not all(ch.isalnum() or ch in "._-" for ch in value):
             raise ValueError(f"{label} inválido")
         return value
 
@@ -127,12 +133,16 @@ class EvidenceDashboardService:
             value = validate_evidence_config(value)
         except Exception as exc:
             raise ValueError(f"configuração Evidence V2 inválida: {exc}") from exc
+        policy = load_activation_policy(self.root / "config" / "evidence_activation.json")
         return {
             "config": value,
             "schema_version": value["schema_version"],
             "pipeline_version": "2.0.0-alpha.2",
-            "shadow_mode": True,
-            "calibration_status": "EM_CALIBRACAO",
+            "shadow_mode": policy["shadow_mode"],
+            "policy_version": policy["policy_version"],
+            "activation_record_id": policy["activation_record_id"],
+            "evidence_ceiling": policy["evidence_ceiling"],
+            "calibration_status": "E1_ATIVO",
             "source": str(path.relative_to(self.root)),
         }
 
@@ -161,7 +171,12 @@ class EvidenceDashboardService:
             value = validate_evidence_config(value)
         except Exception as exc:
             raise ValueError(f"configuração Evidence V2 inválida: {exc}") from exc
-        return {"valid": True, "config": value, "shadow_mode": True}
+        policy = load_activation_policy(self.root / "config" / "evidence_activation.json")
+        return {
+            "valid": True, "config": value, "shadow_mode": policy["shadow_mode"],
+            "policy_version": policy["policy_version"],
+            "evidence_ceiling": policy["evidence_ceiling"],
+        }
 
     def validate_manifest(self, rows: list[dict], validate_files: bool = True) -> dict:
         if not isinstance(rows, list) or not rows:
@@ -184,7 +199,11 @@ class EvidenceDashboardService:
             if not row["batch_id"]:
                 row_errors.append("batch_id obrigatório")
             else:
-                batch_ids.add(row["batch_id"])
+                try:
+                    row["batch_id"] = validate_batch_id(row["batch_id"])
+                    batch_ids.add(row["batch_id"])
+                except ValueError as exc:
+                    row_errors.append(str(exc))
             if row["role"] not in ROLES: row_errors.append("role inválido")
             if row["library_mode"] not in LIBRARY_MODES: row_errors.append("library_mode inválido")
             if row["umi_mode"] not in UMI_MODES: row_errors.append("umi_mode inválido")
@@ -316,8 +335,16 @@ class EvidenceDashboardService:
                 "errors": [f"pipeline_version={state.get('pipeline_version')!r}"],
             }
         errors: list[str] = []
-        if state.get("shadow_mode") is not True:
-            errors.append("run state does not preserve shadow_mode=true")
+        if not isinstance(state.get("shadow_mode"), bool):
+            errors.append("run state shadow_mode must be boolean")
+        if state.get("shadow_mode") is False:
+            try:
+                policy = load_activation_policy(self.root / "config" / "evidence_activation.json")
+                for field in ("policy_version", "activation_record_id", "evidence_ceiling"):
+                    if state.get(field) != policy[field]:
+                        errors.append(f"run state {field} does not match active policy")
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                errors.append(f"active E1 policy is invalid: {exc}")
         if state.get("action") == "evidence_batch":
             errors.extend(validate_commit_metadata(run_dir, run_id))
             batch_path = run_dir / "batch_evidence.json"
@@ -344,12 +371,12 @@ class EvidenceDashboardService:
                 errors.append(f"invalid sample_evidence.json: {exc}")
         if errors:
             return {
-                "status": "ALPHA2_INVALID", "valid_alpha2": False, "complete": True,
+                "status": "EVIDENCE_INVALID", "valid_alpha2": False, "complete": True,
                 "analysis_outcome": "NOT_EVALUABLE", "message": INVALID_ALPHA2_MESSAGE,
                 "errors": errors,
             }
         return {
-            "status": "ALPHA2_VALID", "valid_alpha2": True, "complete": True,
+            "status": "EVIDENCE_VALID", "valid_alpha2": True, "complete": True,
             "analysis_outcome": state.get("analysis_outcome"), "message": "", "errors": [],
         }
 
@@ -358,7 +385,7 @@ class EvidenceDashboardService:
         inspection = self.inspect_run(run_id)
         state["valid_alpha2"] = inspection["valid_alpha2"]
         state["compatibility_status"] = inspection["status"]
-        if inspection["status"] in {"LEGACY_INCOMPATIBLE", "ALPHA2_INVALID"}:
+        if inspection["status"] in {"LEGACY_INCOMPATIBLE", "ALPHA2_INVALID", "EVIDENCE_INVALID"}:
             state["original_status"] = state.get("status")
             state["status"] = inspection["status"].lower()
             state["analysis_outcome"] = "NOT_EVALUABLE"
@@ -392,7 +419,10 @@ class EvidenceDashboardService:
             return {
                 "state": state, "complete": True, "valid_alpha2": True, "official_v1": None,
                 "evidence_v2": evidence, "explanations": STATUS_EXPLANATIONS,
-                "artifacts": [name for name, filename in ARTIFACTS.items() if name not in {"sample_evidence", "batch_evidence"} and (run_dir / filename).is_file()],
+                "artifacts": [
+                    name for name, filename in ARTIFACTS.items()
+                    if (run_dir / filename).is_file()
+                ],
             }
         evidence = promote_for_public_output(json.loads((run_dir / "sample_evidence.json").read_text(encoding="utf-8", errors="strict")))
         sample = evidence.get("sample_id", "")
@@ -400,7 +430,10 @@ class EvidenceDashboardService:
         if official_path and official_path.is_file():
             # The legacy markdown remains an archival artifact.  It is never
             # rendered or automatically adapted by the Evidence API.
-            official_v1 = "Relatório 1.1 preservado somente para compatibilidade; a saída pública é a triagem E1 canônica abaixo."
+            official_v1 = (
+                "Relatório 1.1 preservado somente para compatibilidade; "
+                "a saída experimental canônica é apresentada separadamente abaixo."
+            )
         return {
             "state": state,
             "complete": True,
@@ -408,15 +441,16 @@ class EvidenceDashboardService:
             "official_v1": official_v1,
             "evidence_v2": evidence,
             "explanations": STATUS_EXPLANATIONS,
-            "artifacts": [name for name, filename in ARTIFACTS.items() if name not in {"sample_evidence", "batch_evidence"} and (run_dir / filename).is_file()],
+            "artifacts": [
+                name for name, filename in ARTIFACTS.items()
+                if (run_dir / filename).is_file()
+            ],
         }
 
     def artifact(self, run_id: str, artifact_type: str) -> Path:
         run_id = self._safe_id(run_id, "run_id")
         if artifact_type not in ARTIFACTS:
             raise ValueError("tipo de artefato inválido")
-        if artifact_type in {"sample_evidence", "batch_evidence"}:
-            raise ValueError("evidence JSON is available only through the canonical result endpoint")
         run_dir = self.evidence_root / "runs" / run_id
         inspection = self.inspect_run(run_id)
         if not inspection["valid_alpha2"]:

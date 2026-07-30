@@ -19,7 +19,15 @@ def version(command: str) -> str:
         return "UNAVAILABLE"
     for args in ([command, "--version"], [command, "-version"]):
         try:
-            result = subprocess.run(args, capture_output=True, text=True, timeout=10, check=False)
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=10,
+                check=False,
+            )
             line = (result.stdout or result.stderr).splitlines()
             if line:
                 return line[0].strip()
@@ -66,7 +74,7 @@ def main() -> None:
         "platform": platform.platform(), "config_path": str(Path(args.config).resolve()),
         "config_sha256": sha256_file(args.config), "parameters": values, "artifacts": artifacts,
         "tools": {name: tool_record(name) for name in (
-            "python3", "blastn", "makeblastdb", "bowtie2", "samtools", "spades.py",
+            "python3", "fastp", "blastn", "makeblastdb", "bowtie2", "bowtie2-inspect", "samtools", "spades.py",
             "metaspades.py", "umi_tools", "mafft", "iqtree2", "iqtree",
         )},
     })

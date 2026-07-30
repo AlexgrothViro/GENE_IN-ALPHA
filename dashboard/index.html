@@ -23,16 +23,43 @@
         <strong>Aviso de Performance e Estabilidade:</strong> O projeto está rodando em um disco do Windows. Para evitar lentidão extrema e erros de permissão, é altamente recomendável mover a pasta para o sistema de arquivos nativo do WSL (ex: <code>/home/usuario/Gene-In</code>).
       </div>
 
-      <div class="tabs">
-        <button class="tab active" data-tab="tab-execucao">Execução</button>
-        <button class="tab" data-tab="tab-analise-avancada">Análise Complementar</button>
-        <button class="tab" data-tab="tab-configuracao">Configuração</button>
-        <button class="tab" data-tab="tab-historico">Histórico</button>
-        <button class="tab tab--experimental" data-tab="tab-evidence-v2">Evidence V2 <span class="alpha-badge">alpha</span></button>
+      <div class="tabs" role="tablist" aria-label="Áreas do dashboard">
+        <button id="tab-button-execucao" class="tab active" role="tab" aria-selected="true" aria-controls="tab-execucao" data-tab="tab-execucao">Execução</button>
+        <button id="tab-button-analise" class="tab" role="tab" aria-selected="false" aria-controls="tab-analise-avancada" tabindex="-1" data-tab="tab-analise-avancada">Análise Complementar</button>
+        <button id="tab-button-configuracao" class="tab" role="tab" aria-selected="false" aria-controls="tab-configuracao" tabindex="-1" data-tab="tab-configuracao">Configuração</button>
+        <button id="tab-button-historico" class="tab" role="tab" aria-selected="false" aria-controls="tab-historico" tabindex="-1" data-tab="tab-historico">Histórico</button>
+        <button id="tab-button-evidence" class="tab tab--experimental" role="tab" aria-selected="false" aria-controls="tab-evidence-v2" tabindex="-1" data-tab="tab-evidence-v2">Evidence V2 <span class="alpha-badge">alpha</span></button>
       </div>
 
-      <section id="tab-evidence-v2" class="tab-panel">
-        <div class="notice evidence-shadow-warning"><strong>Evidence V2 em modo experimental.</strong> Os resultados agregados não substituem a classificação validada da versão 1.1.</div>
+      <div class="context-bar" id="context-bar" aria-label="Contexto atual">
+        <div class="context-chip">
+          <span class="context-chip__label">Ambiente</span>
+          <span class="context-chip__value" id="ctx-env">Verificando…</span>
+        </div>
+        <div class="context-chip">
+          <span class="context-chip__label">Banco ativo</span>
+          <span class="context-chip__value" id="ctx-db">Nenhum selecionado</span>
+        </div>
+        <div class="context-chip">
+          <span class="context-chip__label">Amostra</span>
+          <span class="context-chip__value" id="ctx-sample">Nenhuma</span>
+        </div>
+        <div class="context-chip">
+          <span class="context-chip__label">Execução</span>
+          <span class="context-chip__value" id="ctx-job"><span class="ux-badge ux-badge--idle">Aguardando</span></span>
+        </div>
+      </div>
+
+      <div class="next-action" id="next-action" role="status" aria-live="polite">
+        <div class="next-action__icon" id="next-action-icon" aria-hidden="true">➡️</div>
+        <div class="next-action__body">
+          <div class="next-action__label">Próxima ação recomendada</div>
+          <div class="next-action__text" id="next-action-text">Verificando o ambiente efetivo…</div>
+        </div>
+      </div>
+
+      <section id="tab-evidence-v2" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-evidence">
+        <div class="notice evidence-shadow-warning"><strong>Evidence V2 em modo experimental.</strong> Os resultados agregados não substituem o resultado oficial da versão 1.1.</div>
         <p id="evidence-dependencies-status" class="status-line" aria-live="polite"></p>
         <div class="evidence-toolbar">
           <button type="button" class="btn btn--primary evidence-mode active" data-mode="simple">Modo simplificado</button>
@@ -46,12 +73,16 @@
             <label class="field"><span class="field__label">Novo identificador (se enviar FASTQ)</span><input id="evidence-upload-sample" name="upload_sample" class="field__input" placeholder="somente letras, números, ponto, hífen ou sublinhado" /></label>
             <label class="field"><span class="field__label">R1 (opcional para amostra já importada)</span><input id="evidence-r1-file" name="r1file" type="file" class="field__input" accept=".fastq,.fastq.gz" /></label>
             <label class="field"><span class="field__label">R2 (opcional para amostra já importada)</span><input id="evidence-r2-file" name="r2file" type="file" class="field__input" accept=".fastq,.fastq.gz" /></label>
-            <label class="field"><span class="field__label">Perfil viral ou banco</span><select id="evidence-target" name="target" class="field__input"></select></label>
+            <label class="field"><span class="field__label">Perfil viral ou banco</span><select id="evidence-target" name="target" class="field__input" required></select></label>
+            <label class="field"><span class="field__label">Filtro de hospedeiro</span><select id="evidence-host-filter-mode" name="host_filter_mode" class="field__input"><option value="none">Sem filtro de hospedeiro</option><option value="sus_scrofa">Sus scrofa (opt-in)</option><option value="custom">Índice Bowtie2 customizado</option></select></label>
+            <label class="field" data-evidence-host-custom hidden><span class="field__label">Nome do hospedeiro</span><input name="host_name" class="field__input" placeholder="Ex.: Bos taurus" /></label>
+            <label class="field" data-evidence-host-custom hidden><span class="field__label">Prefixo do índice Bowtie2</span><input name="host_index_prefix" class="field__input" placeholder="Ex.: ref/host/bos_taurus_bt2" /></label>
             <label class="field"><span class="field__label">Tipo de biblioteca</span><select name="library_mode" class="field__input"><option value="shotgun">Shotgun</option><option value="amplicon">Amplicon</option><option value="targeted">Targeted</option><option value="unknown">Desconhecido</option></select></label>
             <label class="field"><span class="field__label">Função da amostra</span><select id="evidence-role" name="role" class="field__input"><option value="sample">Amostra</option><option value="negative_extraction">Controle negativo de extração</option><option value="negative_library">Controle negativo de biblioteca</option><option value="negative_sequencing">Controle negativo de sequenciamento</option><option value="positive">Controle positivo</option></select></label>
             <label class="field"><span class="field__label">UMI</span><select name="umi_mode" class="field__input"><option value="none">Sem UMI</option><option value="read_name">No nome da read</option><option value="tag">Tag BAM</option></select></label>
             <label class="field"><span class="field__label">Alvo esperado do controle positivo</span><input id="evidence-expected-target" name="expected_target" class="field__input" disabled /></label>
             <div class="evidence-advanced-only" hidden>
+              <label class="field"><span class="field__label">Analysis profile</span><select name="analysis_profile" class="field__input" data-profile-selector><option value="canonical-e1">Canonical E1</option><option value="assembly-consensus">Assembly consensus</option></select></label>
               <label class="field"><span class="field__label">Configuração V2</span><input name="config" class="field__input" value="config/evidence_v2.yaml" /></label>
               <label class="field"><span class="field__label">Montador</span><select name="assembler" class="field__input"><option value="spades">SPAdes automático</option><option value="metaspades">metaSPAdes automático</option><option value="velvet">Velvet</option></select></label>
             </div>
@@ -71,6 +102,12 @@
             <button class="btn btn--secondary" type="submit">Adicionar ao lote</button>
           </form>
           <div class="table-wrap"><table class="evidence-table"><thead><tr><th>Amostra</th><th>Função</th><th>Biblioteca</th><th>R1/R2</th><th></th></tr></thead><tbody id="evidence-batch-rows"></tbody></table></div>
+          <div class="form-grid">
+            <label class="field"><span class="field__label">Perfil viral ou banco do lote</span><select id="evidence-batch-target" class="field__input" required></select></label>
+            <label class="field"><span class="field__label">Filtro de hospedeiro do lote</span><select id="evidence-batch-host-filter-mode" class="field__input"><option value="none">Sem filtro de hospedeiro</option><option value="sus_scrofa">Sus scrofa (opt-in)</option><option value="custom">Índice Bowtie2 customizado</option></select></label>
+            <label class="field" data-evidence-batch-host-custom hidden><span class="field__label">Nome do hospedeiro</span><input id="evidence-batch-host-name" class="field__input" placeholder="Ex.: Bos taurus" /></label>
+            <label class="field" data-evidence-batch-host-custom hidden><span class="field__label">Prefixo do índice Bowtie2</span><input id="evidence-batch-host-index-prefix" class="field__input" placeholder="Ex.: ref/host/bos_taurus_bt2" /></label>
+          </div>
           <div class="action-row"><input id="evidence-manifest-id" class="field__input compact-input" placeholder="ID do manifesto (opcional)" /><button id="evidence-manifest-validate" class="btn btn--secondary" type="button">Validar</button><button id="evidence-manifest-save" class="btn btn--secondary" type="button">Salvar</button><select id="evidence-manifest-list" class="field__input compact-input"><option value="">Manifestos salvos</option></select><button id="evidence-manifest-open" class="btn btn--secondary" type="button">Reabrir</button><button id="evidence-batch-run" class="btn btn--primary" type="button">Executar lote</button></div>
           <p id="evidence-manifest-status" class="status-line" aria-live="polite"></p>
         </section>
@@ -84,7 +121,7 @@
         <section class="section-card">
           <div class="section-card__header"><h2 class="section-card__title">Resultados</h2><p class="section-card__description">A saída oficial 1.1 e as dimensões experimentais são apresentadas separadamente.</p></div>
           <div id="evidence-result-empty" class="notice">Execute uma análise concluída para visualizar resultados.</div>
-          <div id="evidence-results" hidden><h3>Classificação oficial 1.1</h3><pre id="evidence-v1-result" class="report-content"></pre><h3>Dimensões experimentais Evidence V2</h3><div id="evidence-dimensions" class="evidence-dimensions"></div><div id="evidence-summary"></div><h3>Fragmentos exploratórios retidos para revisão</h3><p>Fragmentos de 20–49 bp nunca aparecem isoladamente como identificação ou detecção.</p><div id="evidence-artifacts" class="action-row"></div></div>
+          <div id="evidence-results" hidden><h3>Resultado oficial 1.1</h3><pre id="evidence-v1-result" class="report-content"></pre><h3>Dimensões experimentais Evidence V2</h3><div id="evidence-dimensions" class="evidence-dimensions"></div><div id="evidence-summary" class="evidence-summary" aria-live="polite"></div><h3>Candidatos computacionais retidos</h3><p>Fragmentos de 20–49 bp nunca aparecem isoladamente como identificação ou detecção.</p><div id="evidence-candidates" class="evidence-candidates"></div><h3>Artefatos canônicos e auxiliares validados</h3><div id="evidence-artifacts" class="action-row"></div></div>
         </section>
 
         <section class="section-card evidence-advanced-only" hidden>
@@ -93,7 +130,7 @@
         </section>
       </section>
 
-      <section id="tab-execucao" class="tab-panel active">
+      <section id="tab-execucao" class="tab-panel active" role="tabpanel" aria-labelledby="tab-button-execucao">
         <!-- Preparação inicial -->
         <section class="section-card section-card--secondary">
           <div class="section-card__header">
@@ -203,7 +240,7 @@
             </div>
             <div class="field">
               <span class="field__label">Assembler</span>
-              <select name="assembler" class="field__input">
+              <select name="assembler" class="field__input" data-assembler-selector>
                 <option value="velvet">Velvet (padrão)</option>
                 <option value="spades">SPAdes</option>
                 <option value="metaspades">metaSPAdes</option>
@@ -231,6 +268,7 @@
             <p class="section-card__description">Executa o pipeline principal abrangendo a remoção de hospedeiro, a montagem e a busca de fragmentos candidatos.</p>
           </div>
           <form id="pipeline-form" class="form-grid">
+            <label class="field"><span class="field__label">Analysis profile</span><select name="analysis_profile" class="field__input" data-profile-selector><option value="canonical-e1">Canonical E1</option><option value="assembly-consensus">Assembly consensus</option></select><span class="field-hint" data-profile-help>Assembly consensus runs Velvet, SPAdes and metaSPAdes when applicable.</span></label>
             <div class="field">
               <span class="field__label">Amostra</span>
               <select id="sample-select" name="sample_select" class="field__input" style="margin-bottom: 0.5rem;"></select>
@@ -238,7 +276,7 @@
             </div>
             <div class="field">
               <span class="field__label">Assembler</span>
-              <select name="assembler" class="field__input">
+              <select name="assembler" class="field__input" data-assembler-selector>
                 <option value="velvet">Velvet (padrão)</option>
                 <option value="spades">SPAdes</option>
                 <option value="metaspades">metaSPAdes</option>
@@ -257,8 +295,8 @@
             <div class="field">
               <span class="field__label">Filtro de hospedeiro</span>
               <select id="host-filter-mode" name="host_filter_mode" class="field__input">
-                <option value="sus_scrofa">Sus scrofa (padrao)</option>
                 <option value="none">Sem filtro de hospedeiro</option>
+                <option value="sus_scrofa">Sus scrofa (opt-in)</option>
                 <option value="custom">Indice Bowtie2 customizado</option>
               </select>
             </div>
@@ -271,7 +309,7 @@
               <input id="host-index-prefix" name="host_index_prefix" class="field__input" placeholder="Ex: ref/host/bos_taurus_bt2" />
               <span id="host-index-status" class="field-hint"></span>
             </div>
-            <button class="btn btn--primary" type="submit">Executar análise principal</button>
+            <button id="pipeline-submit-button" class="btn btn--primary" type="submit">Executar análise principal</button>
           </form>
         </section>
 
@@ -310,7 +348,7 @@
         </section>
       </section>
 
-      <section id="tab-analise-avancada" class="tab-panel">
+      <section id="tab-analise-avancada" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-analise">
         <section class="card">
           <div class="card__header">
             <h2>Análise complementar de hits/contigs virais</h2>
@@ -388,7 +426,7 @@
         </section>
       </section>
 
-      <section id="tab-configuracao" class="tab-panel">
+      <section id="tab-configuracao" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-configuracao">
         <section class="card">
           <div class="card__header">
             <h2>Status do ambiente (environment.yml)</h2>
@@ -531,10 +569,13 @@
         </section>
       </section>
 
-      <section id="tab-historico" class="tab-panel">
+      <section id="tab-historico" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-historico">
         <section class="card">
           <div class="card__header">
             <h2>Histórico de execuções</h2>
+          </div>
+          <div class="history-filters">
+            <input type="search" id="history-search" class="field__input" placeholder="Buscar por amostra, banco ou estado" aria-label="Buscar no histórico" />
           </div>
           <div id="history-list" class="history-list"></div>
         </section>
@@ -550,11 +591,11 @@
       </section>
     </main>
 
-    <!-- Modal: Validação Científica (TSV renderizado) -->
+    <!-- Modal: revisão de hits classificados do fluxo legado -->
     <div id="tsv-modal-overlay" class="tsv-modal-overlay" hidden>
       <div class="tsv-modal" role="dialog" aria-modal="true" aria-labelledby="tsv-modal-title">
         <div class="tsv-modal__header">
-          <h2 id="tsv-modal-title">Validação Científica</h2>
+          <h2 id="tsv-modal-title">Revisão de hits classificados (legado)</h2>
           <button class="tsv-modal__close" id="tsv-modal-close" aria-label="Fechar">✕ Fechar</button>
         </div>
         <div class="tsv-table-wrapper" id="tsv-modal-content">
@@ -563,6 +604,6 @@
       </div>
     </div>
 
-    <script src="/app.js"></script>
+    <script type="module" src="/app.js"></script>
   </body>
 </html>

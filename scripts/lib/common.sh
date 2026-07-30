@@ -33,3 +33,57 @@ check_file() {
     log_error "Arquivo não encontrado ou vazio: $1"
   fi
 }
+
+# Download via EDirect with bounded retries. The caller must validate the
+# temporary FASTA before promoting it to the canonical cache.
+fetch_ncbi_fasta() {
+  local output="$1"
+  local ncbi_db="$2"
+  local query="$3"
+  local retmax="${4:-}"
+  local retries="${EDIRECT_RETRIES:-3}"
+  local delay="${EDIRECT_RETRY_DELAY:-5}"
+  local attempt status error_log
+
+  [[ "$retries" =~ ^[1-9][0-9]*$ ]] || log_error "EDIRECT_RETRIES invalido: $retries (use um inteiro >= 1)"
+  [[ "$delay" =~ ^[0-9]+$ ]] || log_error "EDIRECT_RETRY_DELAY invalido: $delay (use segundos inteiros >= 0)"
+
+  rm -f "$output"
+  error_log="${output}.edirect.stderr.$$"
+  rm -f "$error_log"
+  for ((attempt = 1; attempt <= retries; attempt++)); do
+    rm -f "$output"
+    log_info "EDirect tentativa ${attempt}/${retries} (db=${ncbi_db})..."
+    if [[ -n "$retmax" ]]; then
+      if esearch -db "$ncbi_db" -query "$query" -retmax "$retmax" 2>"$error_log" | \
+          efetch -format fasta >> "$output" 2>>"$error_log"; then
+        status=0
+      else
+        status=$?
+      fi
+    else
+      if esearch -db "$ncbi_db" -query "$query" 2>"$error_log" | \
+          efetch -format fasta >> "$output" 2>>"$error_log"; then
+        status=0
+      else
+        status=$?
+      fi
+    fi
+    if [[ "$status" -eq 0 && -s "$output" ]] && grep -q '^>' "$output"; then
+      rm -f "$error_log"
+      return 0
+    fi
+    rm -f "$output"
+    if [[ -s "$error_log" ]]; then
+      log_warning "EDirect falhou (status=${status}); detalhe: $(tail -n 1 "$error_log")"
+    else
+      log_warning "EDirect retornou FASTA vazio ou invalido (status=${status})."
+    fi
+    if (( attempt < retries )); then
+      log_info "Aguardando ${delay}s antes de repetir o download..."
+      sleep "$delay"
+    fi
+  done
+  rm -f "$error_log"
+  return 1
+}

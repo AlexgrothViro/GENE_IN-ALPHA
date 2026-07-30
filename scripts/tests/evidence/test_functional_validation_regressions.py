@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "scripts/evidence"))
 sys.path.insert(0, str(ROOT / "scripts/lib"))
 
 from select_best_adjusted_hit import REQUIRED_FIELDS, select_best
+from adj_identity import compute_adjusted
 from evidence_dashboard import EvidenceDashboardService
 import ux_dashboard
 
@@ -32,6 +33,23 @@ def row(query: str, adjusted: str, coverage: str = "0.5") -> list[str]:
 
 
 class AdjustedHitSelectionTests(unittest.TestCase):
+    def test_adjusted_identity_uses_query_span_not_gapped_alignment_length(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fasta = root / "query.fa"
+            blast = root / "blast.tsv"
+            output = root / "adjusted.tsv"
+            fasta.write_text(">q\nACGTACGTACGTACGTACGT\n", encoding="utf-8")
+            blast.write_text(
+                "q\tref\t80\t25\t5\t1\t1\t20\t1\t25\t1e-5\t40\t20\t100\n",
+                encoding="utf-8",
+            )
+            compute_adjusted(blast, fasta, output)
+            with output.open(encoding="utf-8", newline="") as handle:
+                row_value = next(csv.DictReader(handle, delimiter="\t"))
+            self.assertEqual(float(row_value["aln_cov"]), 1.0)
+            self.assertEqual(float(row_value["adj_identity"]), 80.0)
+
     def test_one_row_and_many_rows_are_selected_deterministically(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "adjusted.tsv"
@@ -70,6 +88,9 @@ class AdjustedHitSelectionTests(unittest.TestCase):
 class MinimalReportIntegrationTests(unittest.TestCase):
     @staticmethod
     def git_bash() -> Path | None:
+        if os.name != "nt":
+            bash = shutil.which("bash")
+            return Path(bash) if bash else None
         candidates = [
             Path(r"C:\Program Files\Git\bin\bash.exe"),
             Path(r"C:\Program Files\Git\usr\bin\bash.exe"),
@@ -79,10 +100,12 @@ class MinimalReportIntegrationTests(unittest.TestCase):
     @staticmethod
     def posix(path: Path) -> str:
         resolved = path.resolve()
+        if os.name != "nt":
+            return resolved.as_posix()
         drive = resolved.drive.rstrip(":").lower()
         return f"/{drive}/{resolved.as_posix().split(':', 1)[1].lstrip('/')}"
 
-    @unittest.skipUnless(git_bash.__func__(), "Git Bash is required for the real 95_report_minimal.sh flow")
+    @unittest.skipUnless(git_bash.__func__(), "Bash is required for the real 95_report_minimal.sh flow")
     def test_real_report_flow_uses_unique_explicit_adaptation_and_source_hash(self):
         bash = self.git_bash()
         with tempfile.TemporaryDirectory(dir=ROOT / "scripts/tests/evidence") as tmp:
@@ -121,7 +144,10 @@ class DashboardReservationTests(unittest.TestCase):
     def test_individual_dashboard_job_passes_its_private_reservation_to_the_runner(self):
         with tempfile.TemporaryDirectory() as tmp:
             service = EvidenceDashboardService(Path(tmp))
-            params = {"run_id": "dashboard-run-00000001", "sample": "sample-a", "assembler": "spades"}
+            params = {
+                "run_id": "dashboard-run-00000001", "sample": "sample-a",
+                "assembler": "spades", "db": "ptv",
+            }
             with patch.object(ux_dashboard, "EVIDENCE_SERVICE", service):
                 ux_dashboard.initialize_evidence_dashboard_state("evidence_pipeline", params)
                 state = json.loads(
@@ -136,7 +162,7 @@ class DashboardReservationTests(unittest.TestCase):
     def test_v2_failure_is_reported_separately_when_official_v11_is_done(self):
         with tempfile.TemporaryDirectory() as tmp:
             service = EvidenceDashboardService(Path(tmp))
-            params = {"run_id": "dashboard-run-00000002", "sample": "sample-a"}
+            params = {"run_id": "dashboard-run-00000002", "sample": "sample-a", "db": "ptv"}
             with patch.object(ux_dashboard, "EVIDENCE_SERVICE", service):
                 ux_dashboard.initialize_evidence_dashboard_state("evidence_pipeline", params)
                 state_path = service.evidence_root / "state/dashboard-run-00000002.json"

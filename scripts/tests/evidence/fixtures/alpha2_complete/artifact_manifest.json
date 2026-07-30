@@ -17,8 +17,8 @@
       "size": 375
     },
     "locus_evidence.tsv": {
-      "sha256": "19b42057964424a59a35e3ffaae77c0b4ae8f0a070e73f287a863926b23d24c0",
-      "size": 346
+      "sha256": "362e0558ad9931ae6ad78272ebce3a0eddbb666fcde250588507f0c4dacab0d5",
+      "size": 367
     },
     "provenance.json": {
       "sha256": "b3358fa8e5bec0f8feb6b69c06b5393c2f01f1656ecb4d9470cb6f725bbbefdd",
@@ -37,8 +37,8 @@
       "size": 39
     },
     "sample_evidence.json": {
-      "sha256": "d74772a056613d7e1f58814a949458b6e3196227a6202ac401dcdb1867b8bb96",
-      "size": 2265
+      "sha256": "475942b3982bdf5feedec1d361d681e5099dc6e7cf183309b824fbd8dfafa87e",
+      "size": 2545
     }
   },
   "schema_version": "1.0"

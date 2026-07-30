@@ -39,7 +39,7 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 ### Fase 2B — Bloco 2: documentação operacional
 
 - `docs/PAINEL_UX.md` atualizado para reforçar o painel como interface local de verificação de ambiente, DEMO, banco viral, importação de amostras, execução de pipeline, logs e histórico de artefatos.
-- `docs/RELEASE_CHECKLIST.md` atualizado para checklist acadêmico/técnico, com foco em validação operacional, documentação e segurança de dados.
+- `docs/RELEASE_CHECKLIST.md` atualizado para checklist de release técnico, com foco em validação operacional, documentação e segurança de dados.
 - `environment.yml` renomeado para `gene-in`, sem remoção de dependências.
 
 ---

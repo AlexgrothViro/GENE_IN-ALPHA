@@ -91,7 +91,9 @@ com cautela e e candidato natural a refatoracao futura em modulos menores.
 | `scripts/97_make_demo_fastq.py` | Gera reads sinteticas para teste demonstrativo. | **Ativo / demo** |
 | `scripts/90_smoke_test.sh` | Smoke test do ambiente e componentes essenciais. | **Ativo / teste** |
 | `scripts/91_verify_demo_outputs.sh` | Verifica artefatos esperados do demo. | **Ativo / teste** |
-| `scripts/tests/run_smoke_test.sh` | Smoke test alternativo para pipeline demo. | **Ativo / teste** |
+| `scripts/tests/run_test_suite.sh` | Separa suítes de engenharia, operacional e reprodutível; ponto canônico de `make test*`. | **Ativo / teste canônico** |
+| `scripts/tests/verify_locked_runtime.py` | Compara o ambiente Conda ativo com todas as versões/builds do lock. | **Ativo / qualificação de runtime** |
+| `scripts/tests/run_smoke_test.sh` | Smoke alternativo legado, dependente de PTV/rede e fora de `make test`. | **Legacy operacional** |
 | `scripts/30_benchmark_preliminar.py` | Compara resultados preliminares entre montadores. | **Ativo / validacao** |
 | `scripts/98_build_bundle_wsl.sh` | Monta pacote bundle para distribuicao WSL. | **Ativo / release** |
 | `scripts/99_test_bundle_wsl.sh` | Testa integridade do bundle WSL. | **Ativo / release** |

@@ -16,8 +16,6 @@ esac
 # 1. GUARDA AS VARIÁVEIS DO DASHBOARD (Prioridade Máxima)
 INCOMING_DB="${DB:-}"
 INCOMING_DB_QUERY="${DB_QUERY:-}"
-INCOMING_NCBI_DB="${NCBI_DB:-}"
-
 CONFIG_FILE="${REPO_ROOT}/config/picornavirus.env"
 LEGACY_CONFIG="${REPO_ROOT}/config.env"
 if [[ -f "${CONFIG_FILE}" ]]; then
@@ -188,7 +186,7 @@ case "$CMD" in
     ;;
 esac
 
-DB="${DB:-ptv}"
+DB="${DB:-custom}"
 NCBI_DB="${NCBI_DB:-nucleotide}"
 
 # Alias resolution moved to top of the script
@@ -278,7 +276,9 @@ if [[ ! -s "$REF_FASTA" || "$REFRESH_CUSTOM" -eq 1 ]]; then
   log_info "Baixando FASTA (NCBI_DB=${NCBI_DB}; DB_QUERY=${DB_QUERY})..."
   REF_TMP="${REF_FASTA}.download.$$"
   rm -f "$REF_TMP"
-  esearch -db "$NCBI_DB" -query "$DB_QUERY" | efetch -format fasta > "$REF_TMP"
+  if ! fetch_ncbi_fasta "$REF_TMP" "$NCBI_DB" "$DB_QUERY"; then
+    log_error "Download NCBI falhou apos ${EDIRECT_RETRIES:-3} tentativa(s). O FASTA anterior foi preservado; revise a conectividade TLS, a query e tente novamente. Alternativa: forneca um FASTA local em REF_FASTA."
+  fi
   python3 "${SCRIPT_DIR}/lib/input_validation.py" fasta "$REF_TMP"
   mv -f "$REF_TMP" "$REF_FASTA"
   if [[ ! -s "$REF_FASTA" ]]; then

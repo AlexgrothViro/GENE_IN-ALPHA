@@ -18,7 +18,7 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$MANIFEST" ]] || { echo "[FATAL] --batch-manifest is required" >&2; exit 2; }
 RUN_ID="${RUN_ID:-$(python3 -c 'import uuid; print(uuid.uuid4())')}"
-[[ "$RUN_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$ ]] || { echo "[FATAL] invalid run id" >&2; exit 2; }
+RUN_ID="$(python3 "${SCRIPT_DIR}/lib/input_validation.py" run-id "$RUN_ID")"
 
 STATE_FILE="${EVIDENCE_ROOT}/state/${RUN_ID}.json"
 STAGING="${EVIDENCE_ROOT}/.staging/${RUN_ID}"
@@ -30,6 +30,7 @@ python3 "$SCRIPT_DIR/evidence/validate_manifest.py" --manifest "$MANIFEST" --out
 mapfile -t SAMPLES < <(awk -F '\t' 'NR > 1 {print $2}' "$VALIDATED_MANIFEST")
 [[ ${#SAMPLES[@]} -gt 0 ]] || { echo "[FATAL] batch has no samples" >&2; exit 2; }
 BATCH_ID="$(awk -F '\t' 'NR == 2 {print $1}' "$VALIDATED_MANIFEST")"
+BATCH_ID="$(python3 "${SCRIPT_DIR}/lib/input_validation.py" batch-id "$BATCH_ID")"
 INIT=(--state "$STATE_FILE" init --run-id "$RUN_ID" --action evidence_batch --batch-id "$BATCH_ID")
 for sample in "${SAMPLES[@]}"; do INIT+=(--sample "$sample"); done
 if [[ -e "$FINAL" || -e "$STAGING" ]]; then
@@ -108,7 +109,11 @@ stage controls "done" "Estados de controle aplicados somente à cópia transacio
 
 stage evidence_classification running
 python3 "$SCRIPT_DIR/evidence/write_provenance.py" --config "$CONFIG" --out "$STAGING/provenance.json" \
-  --value "run_id=$RUN_ID" --value "batch_id=$BATCH_ID" --value "shadow_mode=true" --value "child_run_count=${#SAMPLES[@]}"
+  --artifact "e1_activation_policy=$REPO_ROOT/config/evidence_activation.json" \
+  --value "run_id=$RUN_ID" --value "batch_id=$BATCH_ID" --value "shadow_mode=false" \
+  --value "policy_version=$(python3 "$SCRIPT_DIR/evidence/activation_policy.py" --field policy_version)" \
+  --value "activation_record_id=$(python3 "$SCRIPT_DIR/evidence/activation_policy.py" --field activation_record_id)" \
+  --value "child_run_count=${#SAMPLES[@]}"
 python3 "$SCRIPT_DIR/evidence/summarize_batch.py" --batch-id "$BATCH_ID" --run-id "$RUN_ID" --root "$STAGING" \
   --run-map "$RUN_MAP" --statuses "$STAGING/control_status.tsv" --out "$STAGING/batch_evidence.json" --report "$STAGING/batch_report.md"
 stage evidence_classification "done"

@@ -1,10 +1,10 @@
 # Adicionando outro hospedeiro ao Gene-In
 
-O filtro de hospedeiro remove reads que alinham contra um indice Bowtie2 antes da montagem e do BLAST viral. O comportamento padrao continua sendo `Sus scrofa`, mas o mesmo fluxo pode usar outro hospedeiro ou ser desativado quando a amostra ja foi filtrada fora do Gene-In.
+O filtro de hospedeiro remove reads que alinham contra um índice Bowtie2 antes da montagem e do BLAST viral. Não existe hospedeiro universal padrão: o perfil deve ser escolhido a partir dos metadados da amostra. Use `Sus scrofa` somente para amostras declaradamente suínas; para hospedeiro desconhecido, Zika sem hospedeiro conhecido ou amostra já filtrada, mantenha o filtro desativado até haver uma decisão explícita.
 
 ## Variaveis principais
 
-Edite `config/picornavirus.env` ou envie as variaveis pelo ambiente antes de executar o pipeline.
+Edite o perfil de configuração correspondente à amostra ou envie as variáveis pelo ambiente antes de executar o pipeline. `config/picornavirus.env` é um perfil histórico, não uma regra global.
 
 ```bash
 HOST_FILTER_ENABLED=true

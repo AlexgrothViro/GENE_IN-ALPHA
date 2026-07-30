@@ -5,19 +5,24 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
+import time
+import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 try:
     from .common import write_json_atomic
+    from .activation_policy import load_activation_policy
     from .evidence_contract import not_evaluable_document
 except ImportError:
     from common import write_json_atomic
+    from activation_policy import load_activation_policy
     from evidence_contract import not_evaluable_document
 
 
 PIPELINE_VERSION = "2.0.0-alpha.2"
-POLICY_VERSION = "2.0-alpha"
 RUN_STATUSES = {"queued", "running", "done", "done_with_warning", "blocked", "failed", "cancelled"}
 STAGE_STATUSES = {"pending", "running", "done", "warning", "blocked", "failed", "cancelled"}
 FAILURE_TYPES = {
@@ -46,12 +51,119 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+@contextmanager
+def state_lock(path: Path, *, timeout_seconds: float = 30.0,
+               stale_after_seconds: float = 3600.0):
+    """Serialize state read-modify-write cycles across Windows and WSL.
+
+    A lock directory is used because its creation is atomic on the shared
+    filesystem. Abandoned locks can be reclaimed only after a conservative
+    stale interval.
+    """
+    path = path.resolve()
+    lock_root = path.parent / ".locks"
+    lock_root.mkdir(parents=True, exist_ok=True)
+    lock_dir = lock_root / f"{path.name}.lock"
+    token = uuid.uuid4().hex
+    started = time.monotonic()
+    while True:
+        try:
+            lock_dir.mkdir()
+        except FileExistsError:
+            try:
+                age = time.time() - lock_dir.stat().st_mtime
+            except FileNotFoundError:
+                continue
+            if age > stale_after_seconds:
+                stale = lock_root / f".{path.name}.stale.{uuid.uuid4().hex}"
+                try:
+                    os.replace(lock_dir, stale)
+                except (FileNotFoundError, FileExistsError, PermissionError, OSError):
+                    pass
+                else:
+                    shutil.rmtree(stale)
+                    continue
+            if time.monotonic() - started >= timeout_seconds:
+                raise TimeoutError(f"timed out waiting for run state lock: {path}")
+            time.sleep(0.02)
+            continue
+        break
+
+    owner = lock_dir / "owner.json"
+    try:
+        owner.write_text(
+            json.dumps({"token": token, "pid": os.getpid(), "created_at": now()}) + "\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        try:
+            lock_dir.rmdir()
+        except OSError:
+            pass
+        raise
+    try:
+        yield
+    finally:
+        current = {}
+        for attempt in range(40):
+            try:
+                current = json.loads(owner.read_text(encoding="utf-8"))
+                break
+            except PermissionError:
+                if os.name != "nt" or attempt == 39:
+                    break
+                time.sleep(min(0.005 * (attempt + 1), 0.1))
+            except (FileNotFoundError, ValueError, json.JSONDecodeError):
+                break
+        if current.get("token") == token:
+            for attempt in range(40):
+                try:
+                    owner.unlink(missing_ok=True)
+                    lock_dir.rmdir()
+                    break
+                except FileNotFoundError:
+                    break
+                except PermissionError:
+                    if os.name != "nt" or attempt == 39:
+                        raise
+                    time.sleep(min(0.005 * (attempt + 1), 0.1))
+
+
+def mutate_state_file(path: Path, mutator) -> dict:
+    with state_lock(path):
+        state = read_state(path)
+        mutator(state)
+        write_json_atomic(path, state)
+        return state
+
+
+def _validate_run_transition(current: str, requested: str) -> None:
+    if current not in RUN_STATUSES:
+        raise ValueError(f"invalid current run status: {current}")
+    if requested == current:
+        return
+    if current in TERMINAL_RUN_STATUSES:
+        raise ValueError(
+            f"run already terminal ({current}); refusing transition to {requested}"
+        )
+    allowed = {
+        "queued": {"running", "blocked", "failed", "cancelled"},
+        "running": {"done", "done_with_warning", "blocked", "failed", "cancelled"},
+    }
+    if requested not in allowed[current]:
+        raise ValueError(f"invalid run transition: {current} -> {requested}")
+
+
 def initial_state(run_id: str, action: str, samples: list[str], batch_id: str | None) -> dict:
+    policy = load_activation_policy()
     return {
         "run_id": run_id,
         "pipeline_version": PIPELINE_VERSION,
-        "policy_version": POLICY_VERSION,
-        "shadow_mode": True,
+        "policy_version": policy["policy_version"],
+        "activation_record_id": policy["activation_record_id"],
+        "activation_record_sha256": policy["sha256"],
+        "evidence_ceiling": policy["evidence_ceiling"],
+        "shadow_mode": policy["shadow_mode"],
         "execution_status": "queued",
         "analysis_outcome": None,
         "evidence_level": None,
@@ -185,16 +297,17 @@ def adopt_reserved_state(path: Path, *, run_id: str, action: str,
     claim = _claim_marker(path)
     _exclusive_marker(claim, {"run_id": run_id, "owner": "evidence_runner", "claimed_at": now()})
     try:
-        state = read_state(path)
-        _validate_adoptable_state(
-            state, run_id=run_id, action=action, samples=samples, batch_id=batch_id,
-            reservation_token=reservation_token, staging=staging, final=final,
-        )
-        state["reservation"].update({
-            "status": "claimed", "owner": "evidence_runner", "claimed_at": now(),
-        })
-        write_json_atomic(path, state)
-        return state
+        with state_lock(path):
+            state = read_state(path)
+            _validate_adoptable_state(
+                state, run_id=run_id, action=action, samples=samples, batch_id=batch_id,
+                reservation_token=reservation_token, staging=staging, final=final,
+            )
+            state["reservation"].update({
+                "status": "claimed", "owner": "evidence_runner", "claimed_at": now(),
+            })
+            write_json_atomic(path, state)
+            return state
     except Exception:
         claim.unlink(missing_ok=True)
         raise
@@ -330,43 +443,48 @@ def main() -> None:
             staging=args.staging, final=args.final,
         )
         return
-    state = read_state(args.state)
     if args.command == "write-failure-evidence":
-        write_failure_evidence(state, args.root, args.reason)
+        with state_lock(args.state):
+            state = read_state(args.state)
+            write_failure_evidence(state, args.root, args.reason)
         return
-    if args.command == "stage":
-        set_stage(state, args.id, args.status, args.message)
-        if args.failure_type:
-            set_failure(state, args.failure_type, args.id, args.message, args.failed_command)
-        if args.status == "running":
-            state["status"] = "running"
-            state["started_at"] = state["started_at"] or now()
-    elif args.command == "status":
-        state["status"] = args.value
-        state["evidence_v2_status"] = args.evidence_v2_status or args.value
-        if args.official_v1_status:
-            state["official_v1_status"] = args.official_v1_status
-        if args.failure_type:
-            set_failure(state, args.failure_type, args.failed_stage, args.failure_message, args.failed_command)
-        for warning in args.warning:
-            if warning not in state["warnings"]:
-                state["warnings"].append(warning)
-        if args.value == "running":
-            state["started_at"] = state["started_at"] or now()
-            state["execution_status"] = "running"
-        if args.value in {"done", "done_with_warning", "blocked", "failed", "cancelled"}:
-            state["finished_at"] = now()
-            state["current_stage"] = None
-            state["execution_status"] = "warning" if args.value == "done_with_warning" else args.value
-        if args.value in {"blocked", "failed", "cancelled"}:
-            state["analysis_outcome"] = "NOT_EVALUABLE"
-            state["evidence_level"] = "NOT_EVALUABLE"
-    elif args.command == "artifact":
-        state["artifacts"][args.name] = args.path
-    elif args.command == "provenance":
-        with args.json.open("r", encoding="utf-8") as handle:
-            state["provenance"] = json.load(handle)
-    write_json_atomic(args.state, state)
+    with state_lock(args.state):
+        state = read_state(args.state)
+        if args.command == "stage":
+            set_stage(state, args.id, args.status, args.message)
+            if args.failure_type:
+                set_failure(state, args.failure_type, args.id, args.message, args.failed_command)
+            if args.status == "running":
+                _validate_run_transition(state["status"], "running")
+                state["status"] = "running"
+                state["started_at"] = state["started_at"] or now()
+        elif args.command == "status":
+            _validate_run_transition(state["status"], args.value)
+            state["status"] = args.value
+            state["evidence_v2_status"] = args.evidence_v2_status or args.value
+            if args.official_v1_status:
+                state["official_v1_status"] = args.official_v1_status
+            if args.failure_type:
+                set_failure(state, args.failure_type, args.failed_stage, args.failure_message, args.failed_command)
+            for warning in args.warning:
+                if warning not in state["warnings"]:
+                    state["warnings"].append(warning)
+            if args.value == "running":
+                state["started_at"] = state["started_at"] or now()
+                state["execution_status"] = "running"
+            if args.value in {"done", "done_with_warning", "blocked", "failed", "cancelled"}:
+                state["finished_at"] = now()
+                state["current_stage"] = None
+                state["execution_status"] = "warning" if args.value == "done_with_warning" else args.value
+            if args.value in {"blocked", "failed", "cancelled"}:
+                state["analysis_outcome"] = "NOT_EVALUABLE"
+                state["evidence_level"] = "NOT_EVALUABLE"
+        elif args.command == "artifact":
+            state["artifacts"][args.name] = args.path
+        elif args.command == "provenance":
+            with args.json.open("r", encoding="utf-8") as handle:
+                state["provenance"] = json.load(handle)
+        write_json_atomic(args.state, state)
 
 
 if __name__ == "__main__":

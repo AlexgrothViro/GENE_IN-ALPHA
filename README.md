@@ -1,6 +1,26 @@
 # Gene-In
 
-O **Gene-In** é um pipeline bioinformático estruturado para recuperar e priorizar fragmentos virais em dados de sequenciamento de alto rendimento provenientes de amostras clínicas ou metagenômicas complexas com baixa carga viral.
+![Versão](https://img.shields.io/badge/vers%C3%A3o-2.0.0--alpha.2-blue)
+![Status](https://img.shields.io/badge/status-shadow__mode-yellow)
+![Licença](https://img.shields.io/badge/licen%C3%A7a-uso%20limitado-lightgrey)
+
+O **Gene-In** é um pipeline bioinformático estruturado para analisar, recuperar e priorizar fragmentos virais curtos em dados de sequenciamento de alto rendimento provenientes de amostras clínicas ou metagenômicas complexas com baixa carga viral. Os perfis PTV/picornavírus são exemplos históricos e não limitam os vírus analisáveis.
+
+*Read this in [English](README.en.md).*
+
+---
+
+## Sumário
+
+1. [Principais Características](#1-principais-características)
+2. [Para quem é?](#2-para-quem-é)
+3. [O que explicitamente NÃO é e NÃO faz?](#3-o-que-explicitamente-não-é-e-não-faz)
+4. [Status de validação](#4-status-de-validação)
+5. [Instalação e Uso Rápido](#5-instalação-e-uso-rápido)
+6. [Como interpretar a saída](#6-como-interpretar-a-saída)
+7. [Estrutura do Repositório](#7-estrutura-do-repositório)
+8. [Citação do software](#8-citação-do-software)
+9. [Licença](#9-licença)
 
 ---
 
@@ -36,7 +56,7 @@ O Gene-In foi projetado para:
 
 A versão `2.0.0-alpha.2` está em `shadow_mode`. Testes unitários e sintéticos verificam contratos e regressões específicas, mas não demonstram corretude científica ponta a ponta. A saída de `shadow_mode` exige benchmark público/sintético congelado, execução real das ferramentas em Linux, controles completos, repetição independente e nova auditoria sem bloqueadores.
 
-Resultados publicados por terceiros não substituem o benchmark próprio e congelado deste projeto. O estado detalhado e as limitações estão documentados em `docs/VALIDATION_STATUS.md` e na matriz de remediação.
+Resultados publicados por terceiros não substituem o benchmark próprio e congelado deste projeto. O estado detalhado e as limitações estão documentados em [`docs/science/validation-status.md`](docs/science/validation-status.md).
 
 ---
 
@@ -46,7 +66,7 @@ Resultados publicados por terceiros não substituem o benchmark próprio e conge
 *   Sistema Linux ou ambiente Windows WSL2 (Ubuntu 22.04 LTS recomendado).
 *   Gerenciador de pacotes Conda ou Mamba.
 
-Para instalacao em Windows novo ou computador com permissoes restritas, consulte tambem `docs/GUIA_RAPIDO_WINDOWS.md`, que lista as permissoes de administrador, WSL/Ubuntu, `sudo`, internet e portas locais que precisam estar liberadas.
+Para instalacao em Windows novo ou computador com permissoes restritas, consulte tambem [`docs/getting-started/guia-rapido-windows.md`](docs/getting-started/guia-rapido-windows.md), que lista as permissoes de administrador, WSL/Ubuntu, `sudo`, internet e portas locais que precisam estar liberadas.
 
 ### Passo a Passo de Configuração
 1.  **Instalar dependências via Conda:**
@@ -54,7 +74,7 @@ Para instalacao em Windows novo ou computador com permissoes restritas, consulte
     conda env create -f environment.yml
     conda activate gene-in
     ```
-2.  **Preparar bancos de referência (ex: Teschovirus A - ptv):**
+2.  **Preparar um banco de referência selecionado (o perfil `ptv` é apenas um exemplo histórico):**
     ```bash
     make db DB=ptv
     ```
@@ -106,7 +126,10 @@ As execuções locais `79f201633acf43b9a395c23725d2e0f0` e `8e612a9309d94d8eae8d
 ```text
 Gene-In/
 +-- Makefile                   # Automação das etapas do pipeline
-+-- README.md                  # Este documento
++-- README.md                  # Este documento (pt-BR)
++-- README.en.md                # Versão em inglês
++-- CHANGELOG.md               # Histórico de mudanças
++-- AGENTS.md                  # Invariantes para engenharia e revisão
 +-- LICENSE                    # Licença pública limitada de uso
 +-- environment.yml            # Definição do ambiente Conda/Mamba
 +-- config/
@@ -119,21 +142,23 @@ Gene-In/
 │   +-- tests/
 │   │   +-- run_smoke_test.sh  # Script de teste de fumaça (smoke test) sintético
 │   +-- lib/                   # Bibliotecas Python e Bash compartilhadas
-+-- docs/
-│   +-- VALIDACAO_CIENTIFICA.md # Diretrizes de validação científica e interpretação
-│   +-- TROUBLESHOOTING.md     # Solução de falhas e problemas comuns
-│   +-- USABILITY_CHECKLIST.md # Checklist manual de usabilidade do painel web
++-- docs/                      # Documentação (ver docs/README.md para o índice completo)
+│   +-- README.md              # Índice da documentação
+│   +-- getting-started/       # Instalação, uso e solução de problemas
+│   +-- architecture/          # Arquitetura, contrato de evidência e terminologia
+│   +-- science/               # Validação científica e radar tecnológico
+│   +-- quality/               # Checklists de revisão, release e usabilidade
 +-- data/
 │   +-- raw/                   # Leituras FASTQ brutas (não versionadas)
 │   +-- ref/                   # Referências virais em formato FASTA
 +-- results/                   # Resultados gerados (relatórios e estatísticas)
 ```
 
+Consulte o [índice completo da documentação](docs/README.md) para a lista de todos os guias, documentos de arquitetura, validação científica e checklists de qualidade.
+
 ---
 
-## 8. Citação e origem acadêmica
-
-O Gene-In foi desenvolvido no contexto de uma pesquisa de mestrado em virologia, com foco na recuperação, organização e priorização reprodutível de fragmentos virais candidatos em dados de sequenciamento.
+## 8. Citação do software
 
 Se utilizar o Gene-In em trabalhos acadêmicos, cite este repositório e a publicação associada quando disponível.
 

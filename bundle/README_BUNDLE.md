@@ -9,7 +9,7 @@ Este diretório contém os scripts wrappers desenvolvidos para facilitar a execu
 O bundle executa a chamada automatizada do pipeline a partir do Prompt de Comando ou PowerShell do Windows, encapsulando o interpretador do Linux de forma transparente:
 
 1.  Certifique-se de ter habilitado o WSL2 e instalado a distribuição Ubuntu conforme as instruções descritas em:
-    *   📂 [docs/INSTALACAO_WINDOWS.md](../docs/INSTALACAO_WINDOWS.md)
+    *   📂 [docs/getting-started/instalacao-windows.md](../docs/getting-started/instalacao-windows.md)
 2.  Extraia a pasta do projeto em um diretório do computador.
 3.  Utilize o atalho **`ABRIR_GENEIN.bat`** na raiz do projeto para iniciar a plataforma com suporte de interface gráfica, ou interaja via terminal do Windows com os seguintes comandos:
 

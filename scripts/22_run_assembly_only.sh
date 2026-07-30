@@ -54,12 +54,15 @@ if [[ -z "$SAMPLE_NAME" ]]; then
   usage
   log_error "Argumento obrigatório ausente: --sample"
 fi
+SAMPLE_NAME="$(python3 "${SCRIPT_DIR}/lib/input_validation.py" sample "$SAMPLE_NAME")" || exit 2
 
 ASSEMBLER="${ASSEMBLER,,}"   # lowercase
 THREADS="${THREADS:-4}"
-RAW_DIR="${REPO_ROOT}/data/raw"
 ASSEMBLY_DIR="${REPO_ROOT}/data/assemblies"
 SUMMARY_DIR="${REPO_ROOT}/results/assemblies/${SAMPLE_NAME}"
+if ! [[ "$THREADS" =~ ^[1-9][0-9]*$ ]]; then
+  log_error "THREADS deve ser um inteiro positivo: $THREADS"
+fi
 
 # ---------------------------------------------------------------------------
 # Validação do assembler
@@ -81,6 +84,13 @@ pick_reads() {
       return 0
     fi
   done
+  for d in "data/host_removed" "data/cleaned" "data/raw"; do
+    local single="${REPO_ROOT}/${d}/${SAMPLE_NAME}.fastq.gz"
+    if [[ -s "$single" ]]; then
+      echo "single|$single"
+      return 0
+    fi
+  done
   return 1
 }
 
@@ -88,12 +98,23 @@ if ! READS="$(pick_reads)"; then
   log_error "FASTQs não encontrados para amostra '${SAMPLE_NAME}'. Procurado em data/host_removed/, data/cleaned/ e data/raw/."
 fi
 
-RAW1="${READS%%|*}"
-RAW2="${READS##*|}"
+READ_MODE="${READS%%|*}"
+if [[ "$READ_MODE" == "single" ]]; then
+  RAW_SINGLE="${READS##*|}"
+  python3 "${SCRIPT_DIR}/lib/input_validation.py" fastq "$RAW_SINGLE" >/dev/null || exit 2
+else
+  RAW1="${READS%%|*}"
+  RAW2="${READS##*|}"
+  python3 "${SCRIPT_DIR}/lib/input_validation.py" fastq "$RAW1" --mate "$RAW2" >/dev/null || exit 2
+fi
 log_info "[ASSEMBLY_ONLY] Amostra: $SAMPLE_NAME"
 log_info "[ASSEMBLY_ONLY] Assembler: $ASSEMBLER  k-mer: $KMER"
-log_info "[ASSEMBLY_ONLY] Input R1: $RAW1"
-log_info "[ASSEMBLY_ONLY] Input R2: $RAW2"
+if [[ "$READ_MODE" == "single" ]]; then
+  log_info "[ASSEMBLY_ONLY] Input single-end: $RAW_SINGLE"
+else
+  log_info "[ASSEMBLY_ONLY] Input R1: $RAW1"
+  log_info "[ASSEMBLY_ONLY] Input R2: $RAW2"
+fi
 
 # ---------------------------------------------------------------------------
 # Criar diretórios
@@ -110,8 +131,10 @@ copy_contigs() {
   if [[ ! -f "$src" ]]; then
     log_error "[ASSEMBLY_ONLY] Contigs não gerados em: $src"
   fi
-  rm -f "$dst"
-  cp -f "$src" "$dst"
+  local temporary
+  temporary="$(mktemp "$(dirname "$dst")/.$(basename "$dst").XXXXXX")"
+  cp -f "$src" "$temporary"
+  mv -f "$temporary" "$dst"
   log_info "[ASSEMBLY_ONLY] Contigs copiados: $src → $dst"
 }
 
@@ -122,22 +145,33 @@ START_TIME="$(date '+%Y-%m-%dT%H:%M:%S')"
 # ---------------------------------------------------------------------------
 case "$ASSEMBLER" in
   velvet)
-    R1="$RAW1" R2="$RAW2" \
-      "${SCRIPT_DIR}/01_run_velvet.sh" "$SAFE_SAMPLE" "$KMER" "${VELVET_OPTS:-}"
+    if [[ "$READ_MODE" == "single" ]]; then
+      SAMPLE_SINGLE="$RAW_SINGLE" ASSEMBLY_DIR="$ASSEMBLY_DIR" \
+        "${SCRIPT_DIR}/01_run_velvet.sh" "$SAFE_SAMPLE" "$KMER" "${VELVET_OPTS:-}"
+    else
+      R1="$RAW1" R2="$RAW2" ASSEMBLY_DIR="$ASSEMBLY_DIR" \
+        "${SCRIPT_DIR}/01_run_velvet.sh" "$SAFE_SAMPLE" "$KMER" "${VELVET_OPTS:-}"
+    fi
     CONTIGS_SRC="${ASSEMBLY_DIR}/${SAFE_SAMPLE}_velvet_k${KMER}/contigs.fa"
     copy_contigs "$CONTIGS_SRC" "${STD_ASM_DIR}/contigs.fa"
     ;;
 
   spades)
-    R1="$RAW1" R2="$RAW2" \
-      "${SCRIPT_DIR}/01_run_spades.sh" "$SAFE_SAMPLE" "$THREADS" "$SPADES_PARAMS" "spades"
+    if [[ "$READ_MODE" == "single" ]]; then
+      SAMPLE_SINGLE="$RAW_SINGLE" ASSEMBLY_DIR="$ASSEMBLY_DIR" \
+        "${SCRIPT_DIR}/01_run_spades.sh" "$SAFE_SAMPLE" "$THREADS" "$SPADES_PARAMS" "spades"
+    else
+      R1="$RAW1" R2="$RAW2" ASSEMBLY_DIR="$ASSEMBLY_DIR" \
+        "${SCRIPT_DIR}/01_run_spades.sh" "$SAFE_SAMPLE" "$THREADS" "$SPADES_PARAMS" "spades"
+    fi
     CONTIGS_SRC="${ASSEMBLY_DIR}/${SAFE_SAMPLE}_spades/contigs.fasta"
     copy_contigs "$CONTIGS_SRC" "${STD_ASM_DIR}/contigs.fa"
     ;;
 
   metaspades)
+    [[ "$READ_MODE" != "single" ]] || log_error "metaSPAdes requer FASTQ paired-end."
     R1="$RAW1" R2="$RAW2" \
-      "${SCRIPT_DIR}/01_run_metaspades.sh" "$SAFE_SAMPLE" "$THREADS" "$SPADES_PARAMS"
+      ASSEMBLY_DIR="$ASSEMBLY_DIR" "${SCRIPT_DIR}/01_run_metaspades.sh" "$SAFE_SAMPLE" "$THREADS" "$SPADES_PARAMS"
     CONTIGS_SRC="${ASSEMBLY_DIR}/${SAFE_SAMPLE}_metaspades/contigs.fasta"
     copy_contigs "$CONTIGS_SRC" "${STD_ASM_DIR}/contigs.fa"
     ;;

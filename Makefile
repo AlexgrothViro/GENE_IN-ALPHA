@@ -4,15 +4,18 @@ SHELL := /bin/bash
 
 SCRIPTS_DIR := scripts
 
+ENV_DB := $(if $(filter environment environment\ override,$(origin DB)),$(DB),)
+ENV_DB_QUERY := $(if $(filter environment environment\ override,$(origin DB_QUERY)),$(DB_QUERY),)
+
 # Parâmetros padrão (podem ser sobrescritos: SAMPLE= KMER=)
-SAMPLE ?= 81554_S150
+SAMPLE ?=
 KMER   ?= 31
 ID     ?= amostra_teste
 R1     ?=
 R2     ?=
 SINGLE ?=
-DB      ?= ptv
-DB_QUERY ?= "\"Teschovirus\"[Organism]"
+DB      ?= custom
+DB_QUERY ?=
 
 # Force simply-expanded evaluation to break any imported environment/recursive loops
 SAMPLE := $(SAMPLE)
@@ -29,6 +32,7 @@ SKIP_QC       ?=
 
 # Parâmetros CLI repassados ao pipeline
 ASSEMBLER      ?=
+ANALYSIS_PROFILE ?=
 SPADES_PARAMS  ?=
 BLAST_TASK     ?=
 BLAST_WORD_SIZE ?=
@@ -43,8 +47,18 @@ BOWTIE2_INDEX := bowtie2/$(DB)
   ptv-fasta ptv-fasta-legacy blastdb bowtie2-index db-blast pipeline test clean clean-safe clean-all fix-wsl \
   db db-list sample-add run smoke-test benchmark-demo
 
+ifneq ($(wildcard config/picornavirus.env),)
 -include config/picornavirus.env
+else
 -include config.env
+endif
+
+ifneq ($(strip $(ENV_DB)),)
+DB := $(ENV_DB)
+endif
+ifneq ($(strip $(ENV_DB_QUERY)),)
+DB_QUERY := $(ENV_DB_QUERY)
+endif
 
 # Strip any double quotes that might be imported literally from env files
 DB              := $(subst ",,$(DB))
@@ -57,6 +71,7 @@ BLAST_DB        := $(subst ",,$(BLAST_DB))
 BOWTIE2_INDEX   := $(subst ",,$(BOWTIE2_INDEX))
 DB_QUERY        := $(subst ",,$(DB_QUERY))
 ASSEMBLER       := $(subst ",,$(ASSEMBLER))
+ANALYSIS_PROFILE := $(subst ",,$(ANALYSIS_PROFILE))
 SPADES_PARAMS   := $(subst ",,$(SPADES_PARAMS))
 BLAST_TASK      := $(subst ",,$(BLAST_TASK))
 BLAST_WORD_SIZE := $(subst ",,$(BLAST_WORD_SIZE))
@@ -119,6 +134,7 @@ help:
 	@echo "  make pipeline SAMPLE=DEMO ASSEMBLER=velvet"
 	@echo "  make pipeline SAMPLE=DEMO ASSEMBLER=spades"
 	@echo "  make pipeline SAMPLE=DEMO ASSEMBLER=metaspades"
+	@echo "  make pipeline SAMPLE=DEMO ANALYSIS_PROFILE=assembly-consensus"
 
 setup_dirs:
 	mkdir -p data/raw data/cleaned data/host_removed data/assemblies
@@ -166,6 +182,7 @@ bowtie2-index: ptv-fasta
 
 pipeline:
 	@PIPELINE_ARGS=(--sample "$(SAMPLE)"); \
+	if [[ -n "$(ANALYSIS_PROFILE)" ]]; then PIPELINE_ARGS+=(--analysis-profile "$(ANALYSIS_PROFILE)"); fi; \
 	if [[ -n "$(ASSEMBLER)" ]];       then PIPELINE_ARGS+=(--assembler "$(ASSEMBLER)"); fi; \
 	if [[ -n "$(SPADES_PARAMS)" ]];   then PIPELINE_ARGS+=(--spades-params "$(SPADES_PARAMS)"); fi; \
 	if [[ -n "$(BLAST_TASK)" ]];      then PIPELINE_ARGS+=(--blast-task "$(BLAST_TASK)"); fi; \
@@ -207,7 +224,17 @@ smoke-test: test-env ptv-fasta-legacy blastdb bowtie2-index
 	BLAST_DB="$(BLAST_DB)" BOWTIE2_INDEX="$(BOWTIE2_INDEX)" \
 	$(SCRIPTS_DIR)/90_smoke_test.sh
 
-test: smoke-test
+.PHONY: test test-engineering test-operational test-reproducible
+test: test-engineering
+
+test-engineering:
+	bash scripts/tests/run_test_suite.sh engineering
+
+test-operational:
+	bash scripts/tests/run_test_suite.sh operational
+
+test-reproducible:
+	bash scripts/tests/run_test_suite.sh reproducible
 
 
 .PHONY: test-demo

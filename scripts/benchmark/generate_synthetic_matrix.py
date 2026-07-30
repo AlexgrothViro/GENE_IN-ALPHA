@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 
 
-LENGTHS = (20, 29, 30, 49, 50, 79, 80, 200)
+LENGTHS = (20, 29, 30, 49, 50, 79, 80, 99, 100, 200)
 CATEGORIES = ("TARGET_VIRUS", "NEAR_NON_TARGET_VIRUS", "HOST", "VECTOR_ADAPTER", "KNOWN_CONTAMINANT", "LOW_COMPLEXITY")
 LIBRARIES = ("shotgun", "amplicon", "targeted", "umi")
 

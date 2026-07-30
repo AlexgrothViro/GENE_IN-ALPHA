@@ -7,10 +7,12 @@ from pathlib import Path
 
 try:
     from .common import read_tsv, write_json_atomic, write_text_atomic
-    from .evidence_contract import validate_document
+    from .activation_policy import load_activation_policy
+    from .evidence_contract import promote_for_public_output, validate_document
 except ImportError:
     from common import read_tsv, write_json_atomic, write_text_atomic
-    from evidence_contract import validate_document
+    from activation_policy import load_activation_policy
+    from evidence_contract import promote_for_public_output, validate_document
 
 
 def main() -> None:
@@ -23,6 +25,7 @@ def main() -> None:
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--report", required=True, type=Path)
     args = parser.parse_args()
+    policy = load_activation_policy()
     statuses = {row["sample_id"]: row for row in read_tsv(args.statuses)}
     samples = []
     for row in read_tsv(args.run_map):
@@ -32,6 +35,7 @@ def main() -> None:
             "sample_id": row["sample_id"], "child_run_id": row["run_id"],
             "execution_status": data["execution_status"], "analysis_outcome": data["analysis_outcome"],
             "evidence_level": data["evidence_level"],
+            "reported_conclusion": data["reported_conclusion"],
             "specificity_status": data["specificity"].get("status", "NOT_EVALUATED"),
             "coverage_status": data["coverage"].get("status", "NOT_EVALUATED"),
             "control_status": data["controls"].get("status", "NOT_EVALUATED"),
@@ -40,12 +44,17 @@ def main() -> None:
         })
     value = {
         "schema_version": "2.0", "pipeline_version": "2.0.0-alpha.2",
-        "run_id": args.run_id, "batch_id": args.batch_id, "shadow_mode": True, "samples": samples,
+        "run_id": args.run_id, "batch_id": args.batch_id,
+        "shadow_mode": policy["shadow_mode"],
+        "policy_version": policy["policy_version"],
+        "activation_record_id": policy["activation_record_id"],
+        "evidence_ceiling": policy["evidence_ceiling"],
+        "reported_conclusion": "E1_ONLY", "samples": samples,
     }
-    write_json_atomic(args.out, value)
+    write_json_atomic(args.out, promote_for_public_output(value))
     lines = [
         "# Gene-In 2.0 — relatório de evidência do lote", "",
-        "> SHADOW MODE: triagem computacional. E1 não afirma presença, ausência, identidade ou confirmação viral.", "",
+        "> E1 ATIVO: evidência computacional canônica. Não afirma presença, ausência, identidade ou confirmação viral.", "",
         "| Amostra | Outcome | Evidência | Especificidade | Cobertura | Controle |",
         "|---|---|---|---|---|---|",
     ]

@@ -14,7 +14,7 @@ def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Benchmark preliminar baseado em resultados existentes.")
     ap.add_argument("--samples", default="DEMO", help="Amostras separadas por vírgula")
     ap.add_argument("--assemblers", default="velvet,metaspades", help="Assemblers separados por vírgula")
-    ap.add_argument("--db", default="ptv", help="Perfil de DB usado (informativo para notas)")
+    ap.add_argument("--db", default="custom", help="Perfil de DB usado (informativo para notas; PTV é apenas histórico)")
     ap.add_argument("--outdir", default="results/benchmark", help="Diretório de saída")
     return ap.parse_args()
 

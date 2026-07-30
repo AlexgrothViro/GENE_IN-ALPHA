@@ -1,0 +1,28 @@
+{
+  "schema_version": "1.0",
+  "activation_record_id": "E1-ACTIVE-2026-07-29",
+  "policy_version": "2.0-e1-active.1",
+  "status": "ACTIVE",
+  "effective_at": "2026-07-29",
+  "shadow_mode": false,
+  "evidence_ceiling": "E1",
+  "approval": {
+    "authority": "project_owner",
+    "source": "documented project-owner authorization",
+    "scope": "Activate canonical Evidence V2 output at E1 only"
+  },
+  "validation_basis": {
+    "historical_validation_dossier": "Previously completed and approved; exact external dossier artifacts are not duplicated in this repository snapshot.",
+    "repository_reverification": "B8 engineering and operational suites passed in the reviewed workspace.",
+    "limitations": "Activation does not authorize E2, E3, E4, diagnostic language, or isolated promotion of 20-49 bp fragments."
+  },
+  "invariants": {
+    "allowed_evidence_levels": [
+      "E1",
+      "NOT_EVALUABLE"
+    ],
+    "exploratory_fragment_max_bp": 49,
+    "exploratory_fragments_never_promote_alone": true,
+    "diagnostic_language_allowed": false
+  }
+}

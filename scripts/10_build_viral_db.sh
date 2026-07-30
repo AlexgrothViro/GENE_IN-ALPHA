@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+# shellcheck disable=SC1091
 source "${SCRIPT_DIR}/lib/common.sh"
 
 usage() {
@@ -100,7 +101,9 @@ log_info "[DB] baixando sequências do NCBI..."
 
 FASTA_TMP="${FASTA}.download.$$"
 trap 'rm -f "$FASTA_TMP"' EXIT
-esearch -db nucleotide -query "$QUERY" | efetch -format fasta > "$FASTA_TMP"
+if ! fetch_ncbi_fasta "$FASTA_TMP" nucleotide "$QUERY"; then
+  log_error "Download NCBI falhou apos ${EDIRECT_RETRIES:-3} tentativa(s); o FASTA existente nao foi substituido. Revise a conectividade TLS e a query."
+fi
 python3 "${SCRIPT_DIR}/lib/input_validation.py" fasta "$FASTA_TMP"
 mv -f "$FASTA_TMP" "$FASTA"
 

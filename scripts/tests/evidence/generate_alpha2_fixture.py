@@ -40,9 +40,7 @@ TABLE_FIELDS = {
 def _write_staging(staging: Path) -> None:
     for name, fields in TABLE_FIELDS.items():
         write_tsv_atomic(staging / name, [], fields)
-    write_json_atomic(
-        staging / "sample_evidence.json",
-        classify(
+    fixture_evidence = classify(
             SAMPLE_ID,
             [],
             [],
@@ -53,8 +51,22 @@ def _write_staging(staging: Path) -> None:
             {},
             provenance={"fixture": True},
             run_id=RUN_ID,
-        ),
+        )
+    # This fixture is intentionally frozen as the historical Alpha.2 shadow
+    # artifact. New production runs use the active E1 policy and may include
+    # optional assembly-consensus observations.
+    fixture_evidence.pop("analysis_observations", None)
+    fixture_evidence["caveats"][0] = (
+        "Evidence 2.0 alpha.2 opera em shadow mode; E2 e E3 permanecem estruturalmente bloqueados."
     )
+    fixture_evidence["metrics"].pop("multi_assembler_locus_count", None)
+    fixture_evidence["promotion_gates"][-1]["reason"] = (
+        "A polÃ­tica alpha.2 mantÃ©m o teto em E1 atÃ© benchmark aprovado."
+    )
+    fixture_evidence["promotion_gates"][-1]["reason"] = (
+        "A pol\u00edtica alpha.2 mant\u00e9m o teto em E1 at\u00e9 benchmark aprovado."
+    )
+    write_json_atomic(staging / "sample_evidence.json", fixture_evidence)
     write_json_atomic(staging / "runtime_preflight.json", {"fixture": True, "valid": True})
     write_json_atomic(
         staging / "provenance.json",

@@ -23,14 +23,20 @@ REQUIRED_TSV = {
     "read_support.tsv",
     "coverage.tsv",
 }
+OPTIONAL_TSV = {"assembly_concordance.tsv"}
 REQUIRED_JSON = {"sample_evidence.json", "provenance.json", "runtime_preflight.json"}
+OPTIONAL_JSON = {"assembly_concordance.json"}
 REQUIRED_TEXT = {"evidence_report.md"}
 REQUIRED_HEADERS = {
     "fragment_evidence.tsv": {"qseqid", "sseqid", "task", "query_covered_bp", "reference_covered_bp", "adj_identity"},
-    "locus_evidence.tsv": {"locus_id", "sseqid", "segment", "orientation", "covered_reference_bp", "query_ids"},
+    "locus_evidence.tsv": {
+        "locus_id", "sseqid", "segment", "orientation", "covered_reference_bp",
+        "query_ids",
+    },
     "competitive_hits.tsv": {"qseqid", "task", "target_bitscore", "competitor_bitscore", "delta_bitscore", "specificity_status"},
     "read_support.tsv": {"sample_id", "reference_id", "category", "locus_id", "query_ids", "unique_templates", "distinct_starts", "support_status"},
     "coverage.tsv": {"reference_id", "category", "locus_id", "query_ids", "breadth_1x", "breadth_3x", "mean_depth_locus", "median_depth_covered"},
+    "assembly_concordance.tsv": {"reference_id", "category", "locus_id", "supporting_assemblers", "support_count", "concordance_status"},
 }
 
 
@@ -59,6 +65,11 @@ def validate_json(path: Path) -> None:
             raise ValueError("runtime preflight is not valid")
     elif path.name == "sample_evidence.json":
         validate_document(value)
+    elif path.name == "assembly_concordance.json":
+        if not isinstance(value, dict) or value.get("schema_version") != "1.0":
+            raise ValueError("assembly concordance schema is invalid")
+        if value.get("evidence_authority") != "CORROBORATION_ONLY":
+            raise ValueError("assembly concordance cannot claim promotion authority")
 
 
 def validate_commit_metadata(directory: Path, expected_run_id: str | None = None) -> list[str]:
@@ -86,8 +97,8 @@ def validate_commit_metadata(directory: Path, expected_run_id: str | None = None
         return errors + ["SUCCESS.json must be an object"]
     if success.get("pipeline_version") != PIPELINE_VERSION:
         errors.append("SUCCESS.json is not an Alpha.2 commit")
-    if success.get("shadow_mode") is not True:
-        errors.append("SUCCESS.json must preserve shadow_mode=true")
+    if not isinstance(success.get("shadow_mode"), bool):
+        errors.append("SUCCESS.json shadow_mode must be boolean")
     if success.get("status") not in {"done", "done_with_warning"}:
         errors.append("SUCCESS.json has no successful terminal status")
     if not isinstance(success.get("run_id"), str) or not success["run_id"].strip():
@@ -102,9 +113,17 @@ def validate_commit_metadata(directory: Path, expected_run_id: str | None = None
     sample_evidence = directory / "sample_evidence.json"
     if sample_evidence.is_file():
         try:
-            evidence = json.loads(sample_evidence.read_text(encoding="utf-8", errors="strict"))
+            evidence = validate_document(
+                json.loads(sample_evidence.read_text(encoding="utf-8", errors="strict"))
+            )
             if evidence.get("run_id") != success.get("run_id"):
                 errors.append("sample evidence run_id does not match SUCCESS.json")
+            if evidence.get("shadow_mode") is not success.get("shadow_mode"):
+                errors.append("sample evidence shadow_mode does not match SUCCESS.json")
+            if not evidence.get("shadow_mode"):
+                for field in ("policy_version", "activation_record_id", "evidence_ceiling"):
+                    if evidence.get(field) != success.get(field):
+                        errors.append(f"sample evidence {field} does not match SUCCESS.json")
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             errors.append(f"invalid sample_evidence.json during commit verification: {exc}")
     if "sample_evidence_sha256" in success and sample_evidence.is_file():
@@ -127,6 +146,20 @@ def validate(directory: Path) -> list[str]:
                 validate_json(path)
         except (OSError, ValueError, csv.Error, json.JSONDecodeError) as exc:
             errors.append(f"invalid artifact {name}: {exc}")
+    for name in sorted(OPTIONAL_JSON):
+        path = directory / name
+        if path.is_file() and path.stat().st_size:
+            try:
+                validate_json(path)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                errors.append(f"invalid optional artifact {name}: {exc}")
+    for name in sorted(OPTIONAL_TSV):
+        path = directory / name
+        if path.is_file() and path.stat().st_size:
+            try:
+                validate_tsv(path)
+            except (OSError, ValueError, csv.Error) as exc:
+                errors.append(f"invalid optional artifact {name}: {exc}")
     partials = [p.name for p in directory.rglob("*") if p.is_file() and (p.name.endswith(".tmp") or p.name.startswith("."))]
     if partials:
         errors.append("temporary artifacts remain: " + ", ".join(sorted(partials)))

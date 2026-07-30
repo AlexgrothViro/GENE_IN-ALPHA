@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import json
 import re
 import sys
 from pathlib import Path
@@ -17,6 +18,8 @@ from typing import Iterator, TextIO
 
 
 SAMPLE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
+RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{7,127}$")
+BATCH_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
 FASTQ_SUFFIXES = (".fastq", ".fastq.gz", ".fq", ".fq.gz")
 
 
@@ -26,6 +29,26 @@ def validate_sample_id(value: str) -> str:
         raise ValueError(
             "identificador de amostra invalido: use 1-80 caracteres "
             "alfanumericos, '.', '_' ou '-'; o primeiro deve ser alfanumerico"
+        )
+    return value
+
+
+def validate_run_id(value: str) -> str:
+    value = (value or "").strip()
+    if not RUN_ID_RE.fullmatch(value):
+        raise ValueError(
+            "run_id invalido: use 8-128 caracteres ASCII alfanumericos, "
+            "'.', '_' ou '-'; o primeiro deve ser alfanumerico"
+        )
+    return value
+
+
+def validate_batch_id(value: str) -> str:
+    value = (value or "").strip()
+    if not BATCH_ID_RE.fullmatch(value):
+        raise ValueError(
+            "batch_id invalido: use 1-80 caracteres ASCII alfanumericos, "
+            "'.', '_' ou '-'; o primeiro deve ser alfanumerico"
         )
     return value
 
@@ -68,7 +91,12 @@ def validate_fastq(path: Path, mate: Path | None = None) -> int:
         try:
             while True:
                 left = _read_fastq_record(first, path, count + 1)
-                right = _read_fastq_record(second, mate, count + 1) if second is not None else None
+                if second is None:
+                    if left is None:
+                        break
+                    count += 1
+                    continue
+                right = _read_fastq_record(second, mate, count + 1)
                 if left is None and right is None:
                     break
                 if left is None or right is None:
@@ -82,7 +110,30 @@ def validate_fastq(path: Path, mate: Path | None = None) -> int:
         finally:
             if second is not None:
                 second.close()
+    if count == 0:
+        raise ValueError(f"FASTQ sem registros: {path}")
     return count
+
+
+def validate_fastp_json(path: Path) -> dict:
+    if not path.is_file() or path.stat().st_size == 0:
+        raise ValueError(f"relatorio JSON do fastp ausente ou vazio: {path}")
+    with path.open("r", encoding="utf-8", errors="strict") as handle:
+        document = json.load(handle)
+    summary = document.get("summary")
+    if not isinstance(summary, dict):
+        raise ValueError(f"relatorio JSON do fastp sem summary valido: {path}")
+    for phase in ("before_filtering", "after_filtering"):
+        metrics = summary.get(phase)
+        if not isinstance(metrics, dict):
+            raise ValueError(f"relatorio JSON do fastp sem summary.{phase}: {path}")
+        for field in ("total_reads", "total_bases"):
+            value = metrics.get(field)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError(
+                    f"relatorio JSON do fastp com {phase}.{field} invalido: {path}"
+                )
+    return document
 
 
 def iter_fasta(path: Path) -> Iterator[tuple[str, str]]:
@@ -129,17 +180,30 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sample = sub.add_parser("sample")
     sample.add_argument("value")
+    run_id = sub.add_parser("run-id")
+    run_id.add_argument("value")
+    batch_id = sub.add_parser("batch-id")
+    batch_id.add_argument("value")
     fastq = sub.add_parser("fastq")
     fastq.add_argument("path", type=Path)
     fastq.add_argument("--mate", type=Path)
+    fastp_json = sub.add_parser("fastp-json")
+    fastp_json.add_argument("path", type=Path)
     fasta = sub.add_parser("fasta")
     fasta.add_argument("path", type=Path)
     args = parser.parse_args()
     try:
         if args.command == "sample":
             print(validate_sample_id(args.value))
+        elif args.command == "run-id":
+            print(validate_run_id(args.value))
+        elif args.command == "batch-id":
+            print(validate_batch_id(args.value))
         elif args.command == "fastq":
             print(validate_fastq(args.path, args.mate))
+        elif args.command == "fastp-json":
+            validate_fastp_json(args.path)
+            print(args.path)
         else:
             print(validate_fasta(args.path))
         return 0

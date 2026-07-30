@@ -9,13 +9,17 @@ INCOMING_HOST_NAME="${HOST_NAME:-}"
 INCOMING_HOST_INDEX_PREFIX="${HOST_INDEX_PREFIX:-}"
 INCOMING_HOST_REMOVED_DIR="${HOST_REMOVED_DIR:-}"
 INCOMING_RAW_DIR="${RAW_DIR:-}"
+INCOMING_THREADS="${THREADS:-}"
+INCOMING_HOST_MIN_ALIGNMENT_RATE="${HOST_MIN_ALIGNMENT_RATE:-}"
 
 CONFIG_FILE="${REPO_ROOT}/config/picornavirus.env"
 LEGACY_CONFIG="${REPO_ROOT}/config.env"
-if [[ -f "${CONFIG_FILE}" ]]; then
-  source "${CONFIG_FILE}"
-elif [[ -f "${LEGACY_CONFIG}" ]]; then
-  source "${LEGACY_CONFIG}"
+if [[ "${PIPELINE_CONFIG_LOADED:-0}" != "1" ]]; then
+  if [[ -f "${CONFIG_FILE}" ]]; then
+    source "${CONFIG_FILE}"
+  elif [[ -f "${LEGACY_CONFIG}" ]]; then
+    source "${LEGACY_CONFIG}"
+  fi
 fi
 
 if [[ -n "$INCOMING_HOST_FILTER_ENABLED" ]]; then
@@ -33,6 +37,12 @@ fi
 if [[ -n "$INCOMING_RAW_DIR" ]]; then
   RAW_DIR="$INCOMING_RAW_DIR"
 fi
+if [[ -n "$INCOMING_THREADS" ]]; then
+  THREADS="$INCOMING_THREADS"
+fi
+if [[ -n "$INCOMING_HOST_MIN_ALIGNMENT_RATE" ]]; then
+  HOST_MIN_ALIGNMENT_RATE="$INCOMING_HOST_MIN_ALIGNMENT_RATE"
+fi
 
 source "${SCRIPT_DIR}/lib/common.sh"
 source "${SCRIPT_DIR}/lib/host_filter.sh"
@@ -44,33 +54,69 @@ fi
 SAMPLE="$1"
 SAMPLE="$(python3 "${SCRIPT_DIR}/lib/input_validation.py" sample "$SAMPLE")"
 SAMPLE_NAME="$SAMPLE"
+export SAMPLE_NAME
 THREADS="${THREADS:-$(nproc --all 2>/dev/null || echo 4)}"
 HOST_MIN_ALIGNMENT_RATE="${HOST_MIN_ALIGNMENT_RATE:-50}"
-HOST_FILTER_ENABLED="${HOST_FILTER_ENABLED:-true}"
-HOST_NAME="${HOST_NAME:-Sus scrofa}"
+HOST_FILTER_ENABLED="${HOST_FILTER_ENABLED:-false}"
+HOST_NAME="${HOST_NAME:-}"
+[[ "$THREADS" =~ ^[1-9][0-9]*$ ]] || log_error "THREADS deve ser inteiro positivo."
+if [[ ! "$HOST_MIN_ALIGNMENT_RATE" =~ ^([0-9]+([.][0-9]+)?|[.][0-9]+)$ ]] || \
+   ! awk -v value="$HOST_MIN_ALIGNMENT_RATE" 'BEGIN {exit !(value >= 0 && value <= 100)}'; then
+  log_error "HOST_MIN_ALIGNMENT_RATE deve ser número entre 0 e 100."
+fi
 
 RAW_DIR="$(resolve_path "${RAW_DIR:-data/raw}")"
 HOST_REMOVED_DIR="$(resolve_path "${HOST_REMOVED_DIR:-data/host_removed}")"
-HOST_INDEX_PREFIX="$(resolve_path "${HOST_INDEX_PREFIX:-ref/host/sus_scrofa_bt2}")"
+HOST_INDEX_PREFIX="${HOST_INDEX_PREFIX:-}"
 
+SINGLE=""
+if [[ -n "${SAMPLE_SINGLE:-}" && ( -n "${SAMPLE_R1:-}" || -n "${SAMPLE_R2:-}" ) ]]; then
+  log_error "Use SAMPLE_SINGLE ou SAMPLE_R1/SAMPLE_R2, mas não ambos."
+fi
+if [[ -z "${SAMPLE_SINGLE:-}" && ( -n "${SAMPLE_R1:-}" || -n "${SAMPLE_R2:-}" ) && \
+   ( -z "${SAMPLE_R1:-}" || -z "${SAMPLE_R2:-}" ) ]]; then
+  log_error "Entradas pareadas explícitas exigem SAMPLE_R1 e SAMPLE_R2."
+fi
 if [[ -n "${SAMPLE_SINGLE:-}" ]]; then
-  log_error "Filtro do hospedeiro requer leituras pareadas. Use SAMPLE_R1/SAMPLE_R2."
-fi
-
-if [[ -n "${SAMPLE_R1:-}" ]]; then
-  R1="$(resolve_path "${SAMPLE_R1}")"
+  SINGLE="$(resolve_path "${SAMPLE_SINGLE}")"
+  check_file "$SINGLE"
+  python3 "${SCRIPT_DIR}/lib/input_validation.py" fastq "$SINGLE" >/dev/null
 else
-  R1="${RAW_DIR}/${SAMPLE}_R1.fastq.gz"
+  if [[ -n "${SAMPLE_R1:-}" ]]; then
+    R1="$(resolve_path "${SAMPLE_R1}")"
+  else
+    R1="${RAW_DIR}/${SAMPLE}_R1.fastq.gz"
+  fi
+  if [[ -n "${SAMPLE_R2:-}" ]]; then
+    R2="$(resolve_path "${SAMPLE_R2}")"
+  else
+    R2="${RAW_DIR}/${SAMPLE}_R2.fastq.gz"
+  fi
+  check_file "$R1"
+  check_file "$R2"
+  python3 "${SCRIPT_DIR}/lib/input_validation.py" fastq "$R1" --mate "$R2" >/dev/null
 fi
 
-if [[ -n "${SAMPLE_R2:-}" ]]; then
-  R2="$(resolve_path "${SAMPLE_R2}")"
-else
-  R2="${RAW_DIR}/${SAMPLE}_R2.fastq.gz"
-fi
+case "${HOST_FILTER_ENABLED,,}" in
+  false|0|no|nao)
+    log_info "Filtro de hospedeiro desabilitado; nenhuma saída será rotulada como host_removed."
+    exit 0
+    ;;
+  true|1|yes|sim)
+    HOST_FILTER_ENABLED=true
+    ;;
+  *)
+    log_error "HOST_FILTER_ENABLED inválido: use true/false (ou 1/0, yes/no, sim/nao)."
+    ;;
+esac
 
-check_file "$R1"
-check_file "$R2"
+[[ -n "$HOST_NAME" ]] || log_error "HOST_FILTER_ENABLED=true exige HOST_NAME explícito."
+[[ -n "$HOST_INDEX_PREFIX" ]] || log_error "HOST_FILTER_ENABLED=true exige HOST_INDEX_PREFIX explícito."
+HOST_INDEX_PREFIX="$(resolve_path "$HOST_INDEX_PREFIX")"
+if ! INDEX_KIND="$(validate_bt2_index "$HOST_INDEX_PREFIX")"; then
+  log_error "Falha na validacao do indice do hospedeiro '${HOST_NAME}' em ${HOST_INDEX_PREFIX}."
+fi
+command -v bowtie2 >/dev/null 2>&1 || log_error "bowtie2 não encontrado no PATH."
 
 if [[ ! -d "$HOST_REMOVED_DIR" ]]; then
   mkdir -p "$HOST_REMOVED_DIR"
@@ -78,21 +124,12 @@ fi
 
 OUT_R1="${HOST_REMOVED_DIR}/${SAMPLE}_R1.host_removed.fastq.gz"
 OUT_R2="${HOST_REMOVED_DIR}/${SAMPLE}_R2.host_removed.fastq.gz"
+OUT_SINGLE="${HOST_REMOVED_DIR}/${SAMPLE}.host_removed.fastq.gz"
 WORK_DIR="$(mktemp -d "${HOST_REMOVED_DIR}/.${SAMPLE}.host-filter.XXXXXX")"
 cleanup() {
   rm -rf -- "$WORK_DIR"
 }
 trap cleanup EXIT
-
-copy_read_to_gz() {
-  local src="$1"
-  local dst="$2"
-  if [[ "$src" == *.gz ]]; then
-    cp -f "$src" "$dst"
-  else
-    gzip -c "$src" > "$dst"
-  fi
-}
 
 validate_staged_pair() {
   local staged_r1="$1"
@@ -103,6 +140,31 @@ validate_staged_pair() {
   if ! gzip -t "$staged_r1" "$staged_r2"; then
     log_error "FASTQs produzidos pelo filtro de hospedeiro estao corrompidos."
   fi
+  if ! python3 "${SCRIPT_DIR}/lib/input_validation.py" fastq "$staged_r1" \
+    --mate "$staged_r2" >/dev/null; then
+    log_error "FASTQs produzidos pelo filtro de hospedeiro são vazios ou não formam pares válidos."
+  fi
+}
+
+promote_staged_single() {
+  local staged="$1"
+  local previous="${WORK_DIR}/previous_single.fastq.gz"
+  local had_previous=0
+  if [[ ! -f "$staged" ]] || ! gzip -t "$staged" || \
+     ! python3 "${SCRIPT_DIR}/lib/input_validation.py" fastq "$staged" >/dev/null; then
+    log_error "Filtro de hospedeiro não produziu um FASTQ single-end válido."
+  fi
+  if [[ -e "$OUT_SINGLE" ]]; then
+    mv "$OUT_SINGLE" "$previous"
+    had_previous=1
+  fi
+  if mv "$staged" "$OUT_SINGLE"; then
+    return 0
+  fi
+  if [[ $had_previous -eq 1 ]]; then
+    mv "$previous" "$OUT_SINGLE"
+  fi
+  log_error "Falha ao promover FASTQ single-end filtrado; a saída anterior foi restaurada."
 }
 
 promote_staged_pair() {
@@ -143,37 +205,31 @@ promote_staged_pair() {
   log_error "Falha ao promover FASTQs filtrados; o par anterior foi restaurado."
 }
 
-case "${HOST_FILTER_ENABLED,,}" in
-  false|0|no|nao)
-    log_info "Filtro de hospedeiro desabilitado (HOST_FILTER_ENABLED=false); reads copiadas sem Bowtie2."
-    copy_read_to_gz "$R1" "${WORK_DIR}/R1.fastq.gz"
-    copy_read_to_gz "$R2" "${WORK_DIR}/R2.fastq.gz"
-    promote_staged_pair "${WORK_DIR}/R1.fastq.gz" "${WORK_DIR}/R2.fastq.gz"
-    echo "  ${OUT_R1}"
-    echo "  ${OUT_R2}"
-    exit 0
-    ;;
-esac
-
-if ! INDEX_KIND="$(validate_bt2_index "$HOST_INDEX_PREFIX")"; then
-  log_error "Falha na validacao do indice do hospedeiro '${HOST_NAME}' em ${HOST_INDEX_PREFIX}."
-fi
-
-TMP_PREFIX="${WORK_DIR}/host_removed"
 BT2_LOG="${HOST_REMOVED_DIR}/${SAMPLE}_host_filter_bowtie2.log"
 
 log_info "Filtrando leituras do hospedeiro (${HOST_NAME}) para amostra ${SAMPLE} usando indice ${INDEX_KIND} e ${THREADS} thread(s)..."
 
-if ! bowtie2 \
-  -x "$HOST_INDEX_PREFIX" \
-  -1 "$R1" \
-  -2 "$R2" \
-  --very-sensitive \
-  -p "$THREADS" \
-  --un-conc-gz "${TMP_PREFIX}.fastq.gz" \
-  -S /dev/null \
-  2> "$BT2_LOG"; then
-  log_error "Bowtie2 falhou durante filtro do hospedeiro. Veja o log: ${BT2_LOG}"
+if [[ -n "$SINGLE" ]]; then
+  if ! bowtie2 \
+    -x "$HOST_INDEX_PREFIX" -U "$SINGLE" \
+    --very-sensitive -p "$THREADS" \
+    --un-gz "${WORK_DIR}/single.fastq.gz" \
+    -S /dev/null 2> "$BT2_LOG"; then
+    log_error "Bowtie2 falhou durante filtro single-end do hospedeiro. Veja o log: ${BT2_LOG}"
+  fi
+else
+  command -v samtools >/dev/null 2>&1 || log_error "samtools não encontrado no PATH."
+  if ! bowtie2 \
+    -x "$HOST_INDEX_PREFIX" -1 "$R1" -2 "$R2" \
+    --very-sensitive -p "$THREADS" 2> "$BT2_LOG" \
+    | samtools view -b -f 12 -F 256 - \
+    | samtools sort -n -@ "$THREADS" -T "${WORK_DIR}/name-sort" - \
+    | samtools fastq -1 "${WORK_DIR}/R1.fastq" -2 "${WORK_DIR}/R2.fastq" \
+        -0 /dev/null -s /dev/null -n - 2>> "$BT2_LOG"; then
+    log_error "Bowtie2/samtools falhou durante filtro pareado do hospedeiro. Veja o log: ${BT2_LOG}"
+  fi
+  gzip -c "${WORK_DIR}/R1.fastq" > "${WORK_DIR}/R1.fastq.gz"
+  gzip -c "${WORK_DIR}/R2.fastq" > "${WORK_DIR}/R2.fastq.gz"
 fi
 
 alignment_rate="$(awk '/overall alignment rate/ {gsub("%", "", $1); print $1}' "$BT2_LOG" | tail -n 1)"
@@ -186,10 +242,12 @@ else
   log_warning "Nao foi possivel ler a taxa de alinhamento do Bowtie2 em ${BT2_LOG}."
 fi
 
-# Bowtie2 com --un-conc-gz gera dois arquivos:
-#   ${TMP_PREFIX}.fastq.1.gz  e  ${TMP_PREFIX}.fastq.2.gz
-promote_staged_pair "${TMP_PREFIX}.fastq.1.gz" "${TMP_PREFIX}.fastq.2.gz"
-
-log_info "Leituras não alinhadas ao hospedeiro salvas em:"
-echo "  ${OUT_R1}"
-echo "  ${OUT_R2}"
+if [[ -n "$SINGLE" ]]; then
+  promote_staged_single "${WORK_DIR}/single.fastq.gz"
+  log_info "Leituras single-end não alinhadas ao hospedeiro salvas em ${OUT_SINGLE}"
+else
+  promote_staged_pair "${WORK_DIR}/R1.fastq.gz" "${WORK_DIR}/R2.fastq.gz"
+  log_info "Pares em que ambos os mates não alinharam ao hospedeiro salvos em:"
+  echo "  ${OUT_R1}"
+  echo "  ${OUT_R2}"
+fi

@@ -12,7 +12,7 @@ Ele foi projetado para:
 - acompanhar logs;
 - acessar histórico e artefatos.
 
-> Escopo científico: o pipeline recupera e prioriza evidências virais (com foco inicial/padrão em PTV/Teschovirus A), mas não confirma infecção sozinho.
+> Escopo científico: o pipeline analisa, recupera e prioriza fragmentos virais curtos em geral. PTV/Teschovirus A é apenas um perfil histórico de demonstração; o painel não confirma infecção sozinho.
 
 ## Como iniciar
 

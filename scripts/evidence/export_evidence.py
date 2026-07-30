@@ -28,12 +28,30 @@ def render(data: dict, *, validated: bool = False) -> str:
     caveat_lines = "\n".join(f"- {item}" for item in data["caveats"])
     candidate_lines = "\n".join(
         f"- `{item.get('candidate_id', '')}` — referência `{item.get('reference_id', '')}`, "
-        f"categoria `{item.get('category', '')}`, locus `{item.get('locus_id', '')}`"
+        f"categoria `{item.get('category', '')}`, locus `{item.get('locus_id', '')}`, "
+        f"classe `{item.get('candidate_class', 'NOT_EVALUATED')}`, "
+        f"promoção `{item.get('promotion_status', 'NOT_EVALUATED')}`"
+        + (
+            f", bloqueios `{', '.join(item.get('blocking_reasons', []))}`"
+            if item.get("blocking_reasons") else ""
+        )
         for item in candidates
     ) or "- Nenhum candidato recuperado nas condições avaliadas."
+    mode_notice = (
+        "**SHADOW MODE:** saída de triagem computacional."
+        if data["shadow_mode"]
+        else "**E1 ATIVO:** saída canônica limitada a evidência computacional."
+    )
+    policy_rows = ""
+    if not data["shadow_mode"]:
+        policy_rows = (
+            f"| Política | `{data['policy_version']}` |\n"
+            f"| Registro de ativação | `{data['activation_record_id']}` |\n"
+            f"| Teto | `{data['evidence_ceiling']}` |\n"
+        )
     return f"""# Gene-In 2.0 — relatório de evidência — {data['sample_id']}
 
-> **SHADOW MODE OBRIGATÓRIO:** saída de triagem computacional. E1 não afirma presença, ausência, identidade ou confirmação viral.
+> {mode_notice} E1 não afirma presença, ausência, identidade ou confirmação viral.
 
 ## Estado público
 
@@ -46,6 +64,7 @@ def render(data: dict, *, validated: bool = False) -> str:
 | Especificidade | `{specificity}` |
 | Cobertura | `{coverage}` |
 | Controles | `{controls}` |
+{policy_rows}
 
 ## Candidatos medidos
 
@@ -68,7 +87,7 @@ def render(data: dict, *, validated: bool = False) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Export the canonical shadow-mode evidence report")
+    parser = argparse.ArgumentParser(description="Export the canonical E1 evidence report")
     parser.add_argument("--json", required=True)
     parser.add_argument("--out", required=True)
     args = parser.parse_args()

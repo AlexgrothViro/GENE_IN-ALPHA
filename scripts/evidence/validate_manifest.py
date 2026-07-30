@@ -13,7 +13,7 @@ except ImportError:
     from evaluate_controls import validate_manifest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
-from input_validation import validate_fastq, validate_sample_id
+from input_validation import validate_batch_id, validate_fastq, validate_sample_id
 
 
 FIELDS = ["batch_id", "sample_id", "role", "library_mode", "umi_mode", "r1", "r2", "expected_target"]
@@ -33,6 +33,7 @@ def main() -> None:
     for row in rows:
         item = {key: row.get(key, "") for key in FIELDS}
         item["sample_id"] = validate_sample_id(item["sample_id"])
+        item["batch_id"] = validate_batch_id(item["batch_id"])
         batch_ids.add(item["batch_id"])
         if item["role"] == "positive" and not item["expected_target"].strip():
             raise ValueError(f"controle positivo sem expected_target: {item['sample_id']}")

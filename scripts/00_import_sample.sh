@@ -38,71 +38,18 @@ normalize_windows_path() {
 
 resolve_existing_file() {
   local raw="$1"
-  # se já existe como caminho (abs/rel), retorna
   if [[ -f "$raw" ]]; then
     printf '%s\n' "$raw"
     return 0
   fi
 
-  # tenta basename em diretórios comuns
-  local base
-  base="$(basename "$raw")"
-
-  local candidates=(
-    "$PWD/$base"
-    "$PWD/data/raw/$base"
-    "$PWD/data/$base"
-    "$HOME/Downloads/$base"
-    "$HOME/Área de Trabalho/$base"
-    "$HOME/Desktop/$base"
-  )
-
-  for c in "${candidates[@]}"; do
-    if [[ -f "$c" ]]; then
-      printf '%s\n' "$c"
-      return 0
-    fi
-  done
-
-  # tenta busca rápida no diretório atual (1 nível)
-  local found
-  found="$(find "$PWD" -maxdepth 2 -type f -name "$base" 2>/dev/null | head -n 1 || true)"
-  if [[ -n "$found" && -f "$found" ]]; then
-    printf '%s\n' "$found"
-    return 0
-  fi
-
-  # não achou
   echo "[ERRO] Arquivo não encontrado: $raw" >&2
-  echo "[DICA] Você pode passar caminho absoluto/relativo, ou apenas o nome do arquivo se ele estiver em:" >&2
-  echo "       - pasta atual" >&2
-  echo "       - data/raw/" >&2
-  echo "       - ~/Downloads/" >&2
-  echo "[DICA] Procurando por '$base' (até 2 níveis abaixo do diretório atual):" >&2
-  find "$PWD" -maxdepth 2 -type f -name "$base" 2>/dev/null | sed 's/^/  - /' >&2 || true
+  echo "[DICA] Informe o caminho exato, absoluto ou relativo ao diretório atual." >&2
   return 1
 }
 
 sanitize_sample() {
   python3 "$SCRIPT_DIR/lib/input_validation.py" sample "$1"
-  return
-  local raw="$1"
-  raw="${raw%\"}"
-  raw="${raw#\"}"
-  raw="${raw%$'\r'}"
-  raw="${raw// /_}"
-  raw="$(printf '%s' "$raw" | LC_ALL=C tr -cs 'A-Za-z0-9_.-' '_')"
-  raw="${raw#_}"; raw="${raw%_}"
-  raw="${raw:0:80}"
-  printf '%s\n' "$raw"
-}
-
-check_ext() {
-  local file="$1"
-  [[ "$file" =~ \.fastq$ || "$file" =~ \.fastq\.gz$ ]] || {
-    echo "[ERRO] extensão inválida (use .fastq ou .fastq.gz): $file"
-    exit 1
-  }
 }
 
 while [[ $# -gt 0 ]]; do
@@ -144,8 +91,6 @@ if [[ ! -s "$R2" ]]; then
   exit 1
 fi
 
-check_ext "$R1"
-check_ext "$R2"
 python3 "$SCRIPT_DIR/lib/input_validation.py" fastq "$R1" --mate "$R2"
 
 if [[ "$R1" != *"R1"* ]]; then

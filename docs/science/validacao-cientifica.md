@@ -15,6 +15,8 @@ Nesta versão, E2 e E3 existem no schema, mas são estruturalmente inacessíveis
 ## Regras de comunicação
 
 - E1 registra somente evidência computacional exploratória; não afirma presença, ausência, identidade, confirmação, variante ou linhagem.
+- `EVIDENCE_RECOVERED` informa que um candidato computacional foi retido; não significa que os gates de promoção passaram. Cada candidato expõe `candidate_class`, `promotion_status` e `blocking_reasons`.
+- Fragmentos de `20–49 bp` são `EXPLORATORY_FRAGMENT`, permanecem com promoção bloqueada e não qualificam isoladamente controles positivos.
 - Uma execução válida sem candidatos usa `NO_EVIDENCE_RECOVERED`, lista vazia e ressalva explícita. Isso não demonstra ausência.
 - Falha de execução, artefato inválido ou etapa científica incompleta usa `NOT_EVALUABLE`.
 - Rótulos históricos são expostos apenas como `legacy_label`, em adaptador de leitura, sempre com teto E1.

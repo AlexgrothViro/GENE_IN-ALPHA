@@ -26,7 +26,7 @@ O modo de demonstração serve para validar o pipeline e certificar-se de que to
 # 1. Gerar os arquivos FASTQ sintéticos do demo (salvos em data/raw/DEMO_R1.fastq.gz e data/raw/DEMO_R2.fastq.gz)
 make demo
 
-# 2. Configurar o banco de dados viral padrão (PTV)
+# 2. Configurar o banco de dados viral do perfil escolhido (PTV é apenas o demo histórico)
 make db DB=ptv
 
 # 3. Executar o pipeline completo na amostra DEMO
@@ -49,7 +49,7 @@ Esta abordagem automatiza todo o processo em um único comando:
 make run SAMPLE=<identificador_amostra> \
   R1=/caminho/reads_R1.fastq.gz \
   R2=/caminho/reads_R2.fastq.gz \
-  DB=ptv
+  DB=nome_do_perfil_viral
 ```
 
 ### Opção B: Controle Passo a Passo (Manual)
@@ -59,8 +59,8 @@ Indicado para depuração e controle individual de cada etapa:
 # 1. Staging: Registra os arquivos de leitura no diretório de trabalho data/raw
 make sample-add ID=<id> R1=<caminho/R1.fastq.gz> R2=<caminho/R2.fastq.gz>
 
-# 2. Preparação do Banco de Referência
-make db DB=ptv
+# 2. Preparação do Banco de Referência escolhido
+make db DB=nome_do_perfil_viral
 
 # 3. Execução das Etapas do Pipeline (Montagem + Triagem BLAST)
 make pipeline SAMPLE=<id>
@@ -94,11 +94,11 @@ make pipeline SAMPLE=<id> ASSEMBLER=metaspades
 
 O pipeline pode utilizar perfis de bancos pré-configurados ou bancos customizados definidos pelo pesquisador.
 
-### Uso de Bancos Padrão (Catálogo Pré-configurado)
+### Uso de Bancos (Catálogo Pré-configurado)
 O Gene-In inclui um catálogo de alvos virais definidos no arquivo `config/targets.json`. Para construir ou atualizar qualquer um deles:
 
 ```bash
-make db DB=ptv         # Porcine teschovirus A
+make db DB=ptv         # exemplo histórico: Porcine teschovirus A
 make db DB=evg         # Enterovirus G
 make db DB=psv         # Sapelovirus A
 make db DB=svv         # Senecavirus A

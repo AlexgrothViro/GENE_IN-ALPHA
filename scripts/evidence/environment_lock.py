@@ -30,6 +30,8 @@ def validate(lockfile: Path, manifest_path: Path) -> dict:
         raise ValueError("unsupported lockfile manifest schema")
     if manifest.get("lockfile") != lockfile.name or manifest.get("sha256") != actual:
         raise ValueError("LOCKFILE_HASH_MISMATCH")
+    if manifest.get("package_entries") != len(entries):
+        raise ValueError("LOCKFILE_ENTRY_COUNT_MISMATCH")
     return {"path": str(lockfile.resolve()), "sha256": actual, "package_entries": len(entries)}
 
 

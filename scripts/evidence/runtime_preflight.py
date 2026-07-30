@@ -28,13 +28,24 @@ def command_info(name: str) -> dict:
     result = {"available": bool(path), "path": path, "version": None, "sha256": None}
     if not path:
         return result
-    try:
-        version = subprocess.run(
-            [path, "--version"], capture_output=True, text=True, check=False
-        )
-        result["version"] = (version.stdout or version.stderr).splitlines()[0][:300]
-    except OSError:
-        result["version"] = None
+    # Velvet treats an arbitrary first argument as an output directory, so a
+    # generic "--version" probe is not read-only for velveth/velvetg.
+    if name not in {"velveth", "velvetg"}:
+        version_flag = "-version" if name in {"blastn", "blastdbcmd", "makeblastdb"} else "--version"
+        try:
+            version = subprocess.run(
+                [path, version_flag],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=15,
+                check=False,
+            )
+            lines = (version.stdout or version.stderr).splitlines()
+            result["version"] = lines[0][:300] if lines else None
+        except (OSError, subprocess.TimeoutExpired):
+            result["version"] = None
     try:
         digest = hashlib.sha256()
         with Path(path).open("rb") as handle:

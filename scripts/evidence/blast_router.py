@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -15,6 +16,7 @@ except ImportError:
 
 
 OUTFMT = "6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore qlen slen"
+IUPAC_NUCLEOTIDES = frozenset("ACGTRYSWKMBDHVN")
 
 
 def profiles_for_length(length: int, config: dict) -> tuple[str, ...]:
@@ -26,10 +28,11 @@ def profiles_for_length(length: int, config: dict) -> tuple[str, ...]:
     return ("conventional",)
 
 
-def profile_parameters(config: dict) -> dict[str, dict[str, object]]:
+def profile_parameters(config: dict, max_target_seqs: int = 50) -> dict[str, dict[str, object]]:
     blast = config["blast"]
     shared = {
-        "gapopen": 5, "gapextend": 2, "evalue": 1000, "max_target_seqs": 50,
+        "gapopen": 5, "gapextend": 2, "evalue": 1000,
+        "max_target_seqs": max_target_seqs,
         "dust": "yes" if blast["explicit_dust"] else "no",
         "soft_masking": "true" if blast["soft_masking"] else "false",
     }
@@ -45,19 +48,58 @@ def write_fasta(path: Path, records: list[tuple[str, str]]) -> None:
             handle.write(f">{name}\n{sequence}\n")
 
 
+def validate_nucleotide_queries(sequences: dict[str, str]) -> None:
+    if not sequences:
+        raise ValueError("query FASTA contains no sequences")
+    for name, sequence in sequences.items():
+        if not sequence:
+            raise ValueError(f"query FASTA contains an empty sequence: {name}")
+        invalid = sorted(set(sequence.upper()) - IUPAC_NUCLEOTIDES)
+        if invalid:
+            raise ValueError(
+                f"query {name!r} contains non-nucleotide symbols: {''.join(invalid)}"
+            )
+
+
+def database_sequence_count(database: str, blastdbcmd: str) -> int:
+    result = subprocess.run(
+        [blastdbcmd, "-db", database, "-info"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    match = re.search(r"([\d,]+)\s+sequences?;", result.stdout)
+    if not match:
+        raise ValueError("unable to determine BLAST database sequence count")
+    count = int(match.group(1).replace(",", ""))
+    if count < 1:
+        raise ValueError("BLAST database contains no sequences")
+    return count
+
+
 def deduplicate_combined_hits(chunks: list[str]) -> str:
-    """Keep one raw hit per query/reference/orientation/reference interval."""
-    output = []
-    seen = set()
+    """Keep the strongest exact-coordinate hit emitted by dual BLAST profiles."""
+    order = []
+    best: dict[tuple[object, ...], tuple[tuple[object, ...], str]] = {}
     for line in "".join(chunks).splitlines():
         fields = line.split("\t")
-        if len(fields) < 10:
-            raise ValueError("BLAST output has fewer columns than the configured outfmt")
-        start, end = int(fields[8]), int(fields[9])
-        key = (fields[0], fields[1], "+" if start <= end else "-", min(start, end), max(start, end))
-        if key not in seen:
-            seen.add(key)
-            output.append(line)
+        if len(fields) != 14:
+            raise ValueError("BLAST output does not match the configured 14-column outfmt")
+        qstart, qend, sstart, send = map(int, (fields[6], fields[7], fields[8], fields[9]))
+        bitscore, evalue, pident = float(fields[11]), float(fields[10]), float(fields[2])
+        key = (
+            fields[0], fields[1],
+            "+" if (qend - qstart) * (send - sstart) >= 0 else "-",
+            min(qstart, qend), max(qstart, qend),
+            min(sstart, send), max(sstart, send),
+        )
+        rank = (-bitscore, evalue, -pident, line)
+        if key not in best:
+            order.append(key)
+            best[key] = (rank, line)
+        elif rank < best[key][0]:
+            best[key] = (rank, line)
+    output = [best[key][1] for key in order]
     return "\n".join(output) + ("\n" if output else "")
 
 
@@ -67,7 +109,14 @@ def run_router(query: str, database: str, config: dict, threads: int,
     executable = shutil.which("blastn")
     if not executable:
         raise RuntimeError("blastn is not available")
+    blastdbcmd = shutil.which("blastdbcmd")
+    if not blastdbcmd:
+        raise RuntimeError("blastdbcmd is not available")
+    if threads < 1:
+        raise ValueError("threads must be positive")
     sequences = read_fasta(query)
+    validate_nucleotide_queries(sequences)
+    sequence_count = database_sequence_count(database, blastdbcmd)
     grouped: dict[str, list[tuple[str, str]]] = {"short": [], "conventional": []}
     assignments = []
     for name, sequence in sequences.items():
@@ -75,7 +124,9 @@ def run_router(query: str, database: str, config: dict, threads: int,
         assignments.append({"query_id": name, "length": len(sequence), "profiles": list(profiles)})
         for profile in profiles:
             grouped[profile].append((name, sequence))
-    parameters = profile_parameters(config)
+    # Specificity needs the whole competitive panel, not an arbitrary top-N
+    # report.  The effective report limit therefore covers every DB subject.
+    parameters = profile_parameters(config, max(50, sequence_count))
     outputs = {"short": short_out, "conventional": conventional_out}
     combined_chunks: list[str] = []
     with tempfile.TemporaryDirectory(prefix="genein-blast-router-") as tmp_name:
@@ -117,6 +168,8 @@ def run_router(query: str, database: str, config: dict, threads: int,
     return {
         "router_schema": "1.0", "blastn_version": version_lines[0] if version_lines else "UNKNOWN",
         "database_prefix": str(database_path.resolve()),
+        "database_sequence_count": sequence_count,
+        "report_limit_covers_database": True,
         "database_components": {
             str(path.resolve()): {"size": path.stat().st_size, "sha256": sha256_file(path)}
             for path in database_files

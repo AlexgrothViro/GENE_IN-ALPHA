@@ -4,8 +4,8 @@
 # =============================================================================
 # Objetivo: Recuperação de fragmentos genômicos virais curtos/ultra-curtos
 # em dados metagenômicos. Usa spades.py --meta com k-mers otimizados para
-# fragmentos pequenos (foco do mestrado: detecção de vírus em amostras
-# metagenômicas fragmentadas e de baixa cobertura).
+# fragmentos pequenos para detecção de vírus em amostras metagenômicas
+# fragmentadas e de baixa cobertura.
 #
 # Uso:
 #   bash scripts/01_run_metaspades.sh <SAMPLE> [THREADS] [EXTRA_PARAMS]
@@ -13,7 +13,6 @@
 #
 # Variáveis de ambiente aceitas:
 #   R1, R2           — caminhos absolutos dos reads paired-end
-#   SAMPLE_SINGLE    — caminho para single-end (alternativa a R1/R2)
 #   THREADS          — número de threads (padrão: 4)
 #   VELVET_K         — k-mer base (usado para definir escala dos k-mers)
 #   SPADES_PARAMS    — flags extras para spades.py
@@ -29,18 +28,24 @@ LEGACY_CONFIG="${REPO_ROOT}/config.env"
 # Se chamado pelo pipeline principal, não recarregar config.env.
 if [[ "${PIPELINE_CONFIG_LOADED:-0}" != "1" ]]; then
   if [[ -f "${CONFIG_FILE}" ]]; then
+    # shellcheck disable=SC1090
     source "${CONFIG_FILE}"
   elif [[ -f "${LEGACY_CONFIG}" ]]; then
+    # shellcheck disable=SC1090
     source "${LEGACY_CONFIG}"
   fi
 fi
 
+# shellcheck disable=SC1091
 source "${SCRIPT_DIR}/lib/common.sh"
 
 SAMPLE="${1:?SAMPLE obrigatório}"
 THREADS="${2:-${THREADS:-4}}"
 SAMPLE="$(python3 "${SCRIPT_DIR}/lib/input_validation.py" sample "$SAMPLE")"
 SPADES_PARAMS="${3:-${SPADES_PARAMS:-}}"
+if ! [[ "$THREADS" =~ ^[1-9][0-9]*$ ]]; then
+  log_error "THREADS deve ser um inteiro positivo: '$THREADS'."
+fi
 
 # Forçar offset 33 para dados sintéticos do pipeline para evitar falhas do auto-detector
 if [[ "$SAMPLE" == "DEMO" || "$SAMPLE" == "nohits" ]]; then
@@ -62,9 +67,8 @@ OUTDIR="${ASSEMBLY_DIR}/${SAFE_SAMPLE}_metaspades"
 ORIG_OUTDIR="${ASSEMBLY_DIR}/${SAMPLE}_metaspades"
 
 # ─────────────────────────────────────────────────
-# K-mers otimizados para fragmentos curtos/ultra-curtos
-# Foco do trabalho: recuperar genomas virais fragmentados
-# K-mers menores (21, 33) capturam fragmentos ultrashort
+# K-mers automáticos por padrão. ADVANCED_KMERS é uma decisão explícita de
+# configuração e não é inferida pelo script.
 # ─────────────────────────────────────────────────
 KMERS="${ADVANCED_KMERS:-auto}"
 KMER_ARGS=()
@@ -103,51 +107,44 @@ RAW_SINGLE="${SAMPLE_SINGLE:-${SINGLE:-${FASTQ_SINGLE:-}}}"
 RAW1="${R1:-${READ1:-${FASTQ_R1:-}}}"
 RAW2="${R2:-${READ2:-${FASTQ_R2:-}}}"
 
-if [[ -z "${RAW_SINGLE}" ]]; then
-  if [[ -z "${RAW1}" || -z "${RAW2}" ]]; then
+if [[ -n "$RAW_SINGLE" ]]; then
+  log_error "metaSPAdes requer uma biblioteca curta paired-end; single-end nao e suportado."
+fi
+if [[ -n "$RAW1" || -n "$RAW2" ]]; then
+  [[ -n "$RAW1" && -n "$RAW2" ]] || log_error "R1 e R2 devem ser informados juntos."
+else
     RAW1="$(find_read "$SAMPLE" "$RAW_DIR" "R1")"
     RAW2="$(find_read "$SAMPLE" "$RAW_DIR" "R2")"
-  fi
-  if [[ -z "${RAW1}" || -z "${RAW2}" ]]; then
-    log_error "FASTQs não encontrados para sample='$SAMPLE'.
+fi
+if [[ -z "${RAW1}" || -z "${RAW2}" ]]; then
+  log_error "FASTQs nao encontrados para sample='$SAMPLE'.
 Procurei em: $RAW_DIR
 Alternativas aceitas:
   ${SAMPLE}_R1*.fastq(.gz) / ${SAMPLE}_R2*.fastq(.gz)
   ${SAMPLE}_1*.fq(.gz)     / ${SAMPLE}_2*.fq(.gz)
 Defina explicitamente:
   R1=/caminho/r1.fastq.gz R2=/caminho/r2.fastq.gz bash $0 $SAMPLE"
-  fi
 fi
+RAW1="$(resolve_path "$RAW1")"
+RAW2="$(resolve_path "$RAW2")"
+python3 "${SCRIPT_DIR}/lib/input_validation.py" fastq "$RAW1" --mate "$RAW2" >/dev/null || exit 2
 
 # ─────────────────────────────────────────────────
 # Verificações de pré-requisito
 # ─────────────────────────────────────────────────
 command -v spades.py >/dev/null 2>&1 || log_error $'spades.py não encontrado no PATH.\nInstale com: sudo apt install -y spades\nOu use o bundle: bash bundle/install_wsl.sh'
 
-if [[ -n "${RAW_SINGLE}" ]]; then
-  check_file "$RAW_SINGLE"
-else
-  check_file "$RAW1"
-  check_file "$RAW2"
-fi
-
 # ─────────────────────────────────────────────────
 # Execução
 # ─────────────────────────────────────────────────
-mkdir -p "$OUTDIR"
-
 log_info "[metaSPAdes] sample=$SAMPLE"
 if [[ "$SAFE_SAMPLE" != "$SAMPLE" ]]; then
   log_info "[metaSPAdes] AVISO: espaço no nome da amostra detectado. Diretório sanitizado: $OUTDIR"
 fi
 log_info "[metaSPAdes] output=$OUTDIR"
 log_info "[metaSPAdes] k-mers=$KMERS  threads=$THREADS"
-if [[ -n "${RAW_SINGLE}" ]]; then
-  log_info "[metaSPAdes] SINGLE=$RAW_SINGLE"
-else
-  log_info "[metaSPAdes] R1=$RAW1"
-  log_info "[metaSPAdes] R2=$RAW2"
-fi
+log_info "[metaSPAdes] R1=$RAW1"
+log_info "[metaSPAdes] R2=$RAW2"
 [[ -n "$SPADES_PARAMS" ]] && log_info "[metaSPAdes] extra params='$SPADES_PARAMS'"
 
 # Nota: --meta é o modo correto do metaSPAdes — habilita o assembler metagenômico
@@ -181,50 +178,47 @@ if [[ -n "${SPADES_PARAMS}" ]]; then
   SAFE_PARAMS="${SAFE_PARAMS# }"  # remove espaço inicial
 fi
 [[ -n "$SAFE_PARAMS" ]] && log_info "[metaSPAdes] params extras aplicados: '$SAFE_PARAMS'"
+read -r -a SAFE_PARAMS_ARGS <<< "$SAFE_PARAMS"
 
 # Criar ambiente temporário curto livre de espaços/parênteses para evitar bugs do spades.py
 SPADES_TMP_DIR="/tmp/spades_tmp_$(date +%s)_$$"
 mkdir -p "$SPADES_TMP_DIR"
 SPADES_TMP_OUT="$SPADES_TMP_DIR/out"
+trap 'rm -rf "$SPADES_TMP_DIR"' EXIT
 
 # Links simbólicos de entrada curtos
-if [[ -n "${RAW_SINGLE}" ]]; then
-  ln -sf "$RAW_SINGLE" "$SPADES_TMP_DIR/s.fastq.gz"
-  log_info "[metaSPAdes] Executando montagem via link curto: $SPADES_TMP_DIR/s.fastq.gz"
-  spades.py \
-    --meta \
-    "${KMER_ARGS[@]}" \
-    -s "$SPADES_TMP_DIR/s.fastq.gz" \
-    -o "$SPADES_TMP_OUT" \
-    -t "$THREADS" \
-    --only-assembler \
-    ${SAFE_PARAMS}
-else
-  ln -sf "$RAW1" "$SPADES_TMP_DIR/r1.fastq.gz"
-  ln -sf "$RAW2" "$SPADES_TMP_DIR/r2.fastq.gz"
-  log_info "[metaSPAdes] Executando montagem via links curtos em $SPADES_TMP_DIR"
-  spades.py \
-    --meta \
-    "${KMER_ARGS[@]}" \
-    -1 "$SPADES_TMP_DIR/r1.fastq.gz" \
-    -2 "$SPADES_TMP_DIR/r2.fastq.gz" \
-    -o "$SPADES_TMP_OUT" \
-    -t "$THREADS" \
-    --only-assembler \
-    ${SAFE_PARAMS}
-fi
+ln -sf "$RAW1" "$SPADES_TMP_DIR/r1.fastq.gz"
+ln -sf "$RAW2" "$SPADES_TMP_DIR/r2.fastq.gz"
+log_info "[metaSPAdes] Executando montagem via links curtos em $SPADES_TMP_DIR"
+spades.py \
+  --meta \
+  "${KMER_ARGS[@]}" \
+  -1 "$SPADES_TMP_DIR/r1.fastq.gz" \
+  -2 "$SPADES_TMP_DIR/r2.fastq.gz" \
+  -o "$SPADES_TMP_OUT" \
+  -t "$THREADS" \
+  --only-assembler \
+  "${SAFE_PARAMS_ARGS[@]}"
 
-# Copiar os resultados de volta para a pasta real do Gene-In
-if [[ -f "$SPADES_TMP_OUT/contigs.fasta" ]]; then
-  mkdir -p "$OUTDIR"
-  cp -f "$SPADES_TMP_OUT/contigs.fasta" "$OUTDIR/contigs.fasta"
-  # Copiar outros arquivos úteis se existirem
-  [[ -f "$SPADES_TMP_OUT/scaffolds.fasta" ]] && cp -f "$SPADES_TMP_OUT/scaffolds.fasta" "$OUTDIR/scaffolds.fasta" 2>/dev/null || true
-  [[ -f "$SPADES_TMP_OUT/spades.log" ]] && cp -f "$SPADES_TMP_OUT/spades.log" "$OUTDIR/spades.log" 2>/dev/null || true
-fi
+# Validate the current attempt before looking at the stable output directory.
+check_file "$SPADES_TMP_OUT/contigs.fasta"
+python3 "${SCRIPT_DIR}/lib/input_validation.py" fasta "$SPADES_TMP_OUT/contigs.fasta" >/dev/null || \
+  log_error "metaSPAdes gerou contigs.fasta invalido."
 
-# Limpar arquivos temporários curtos
-rm -rf "$SPADES_TMP_DIR"
+mkdir -p "$OUTDIR"
+CONTIGS_TMP="$(mktemp "${OUTDIR}/.contigs.fasta.XXXXXX")"
+cp -f "$SPADES_TMP_OUT/contigs.fasta" "$CONTIGS_TMP"
+mv -f "$CONTIGS_TMP" "$OUTDIR/contigs.fasta"
+if [[ -f "$SPADES_TMP_OUT/scaffolds.fasta" ]]; then
+  SCAFFOLDS_TMP="$(mktemp "${OUTDIR}/.scaffolds.fasta.XXXXXX")"
+  cp -f "$SPADES_TMP_OUT/scaffolds.fasta" "$SCAFFOLDS_TMP"
+  mv -f "$SCAFFOLDS_TMP" "$OUTDIR/scaffolds.fasta"
+fi
+if [[ -f "$SPADES_TMP_OUT/spades.log" ]]; then
+  SPADES_LOG_TMP="$(mktemp "${OUTDIR}/.spades.log.XXXXXX")"
+  cp -f "$SPADES_TMP_OUT/spades.log" "$SPADES_LOG_TMP"
+  mv -f "$SPADES_LOG_TMP" "$OUTDIR/spades.log"
+fi
 
 check_file "$OUTDIR/contigs.fasta"
 

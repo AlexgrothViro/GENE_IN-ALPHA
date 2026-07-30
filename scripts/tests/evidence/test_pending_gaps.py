@@ -2,8 +2,11 @@ import hashlib
 import importlib.util
 import json
 import os
+import signal
 import sys
+import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -86,7 +89,7 @@ class PendingGapRegressionTests(unittest.TestCase):
             self.assertIsNone(result["evidence_v2"])
             self.assertNotEqual(result.get("evidence_level"), "E1")
             self.assertTrue(result["artifacts_preserved"])
-            with self.assertRaisesRegex(ValueError, "canonical result endpoint"):
+            with self.assertRaisesRegex(ValueError, "NOT_EVALUABLE"):
                 service.artifact(run_id, "sample_evidence")
 
     def test_dashboard_reports_cancellation_group_kill_failure_as_failed_not_success(self):
@@ -110,6 +113,97 @@ class PendingGapRegressionTests(unittest.TestCase):
         finally:
             with ux_dashboard.jobs_lock:
                 ux_dashboard.jobs.pop(job_id, None)
+
+    def test_queued_cancellation_cannot_be_overwritten_by_job_start(self):
+        job_id = "queued-cancel-test"
+        with tempfile.TemporaryDirectory() as tmp:
+            temp_root = Path(tmp)
+            with ux_dashboard.jobs_lock:
+                ux_dashboard.jobs[job_id] = {
+                    "status": "cancelling", "action": "pipeline", "output": [],
+                }
+            try:
+                with (
+                    patch.object(ux_dashboard, "REPO_ROOT", temp_root),
+                    patch.object(ux_dashboard, "LOG_DIR", temp_root / "logs"),
+                    patch.object(ux_dashboard, "RUNS_DIR", temp_root / "runs"),
+                    patch.object(
+                        ux_dashboard, "build_command",
+                        return_value=([sys.executable, "-c", "print('should not run')"], {}),
+                    ),
+                    patch.object(ux_dashboard, "Popen") as popen,
+                ):
+                    ux_dashboard.run_job(job_id, "pipeline", {"sample": "sample-a"})
+                popen.assert_not_called()
+                self.assertEqual(ux_dashboard.jobs[job_id]["status"], "cancelled")
+            finally:
+                with ux_dashboard.jobs_lock:
+                    ux_dashboard.jobs.pop(job_id, None)
+
+    def test_force_terminal_state_is_not_evaluable_and_is_locked(self):
+        run_id = "terminal-state-test"
+        with tempfile.TemporaryDirectory() as tmp:
+            evidence_root = Path(tmp)
+            state_path = evidence_root / "state" / f"{run_id}.json"
+            write_json_atomic(
+                state_path,
+                initial_state(run_id, "evidence_single", ["sample-a"], None),
+            )
+            with patch.object(ux_dashboard.EVIDENCE_SERVICE, "evidence_root", evidence_root):
+                ux_dashboard.force_evidence_state_terminal(
+                    run_id, "failed", "simulated", "TOOL_FAILURE",
+                )
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["status"], "failed")
+            self.assertEqual(state["execution_status"], "failed")
+            self.assertEqual(state["analysis_outcome"], "NOT_EVALUABLE")
+            self.assertEqual(state["evidence_level"], "NOT_EVALUABLE")
+
+    def test_windows_signal_value_error_is_reported_not_raised(self):
+        class InvalidSignalProcess:
+            pid = 1
+
+            def send_signal(self, _signal):
+                raise ValueError("unsupported signal")
+
+        with patch.object(ux_dashboard.os, "name", "nt"):
+            ok, error = ux_dashboard.terminate_process_group(InvalidSignalProcess(), 999)
+        self.assertFalse(ok)
+        self.assertIn("unsupported signal", error)
+
+    @unittest.skipIf(os.name == "nt", "POSIX process-group semantics")
+    def test_cancellation_reaches_spawned_child_process(self):
+        script = (
+            "import subprocess,sys,time;"
+            "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);"
+            "print(child.pid,flush=True);time.sleep(60)"
+        )
+        parent = subprocess.Popen(
+            [sys.executable, "-u", "-c", script],
+            stdout=subprocess.PIPE, text=True, start_new_session=True,
+        )
+        child_pid = int(parent.stdout.readline().strip())
+        try:
+            ok, error = ux_dashboard.terminate_process_group(parent, signal.SIGTERM)
+            self.assertTrue(ok, error)
+            parent.wait(timeout=5)
+            deadline = time.monotonic() + 5
+            child_state = None
+            while time.monotonic() < deadline:
+                try:
+                    child_state = Path(f"/proc/{child_pid}/stat").read_text().split()[2]
+                except FileNotFoundError:
+                    child_state = None
+                if child_state in {None, "Z"}:
+                    break
+                time.sleep(0.05)
+            self.assertIn(child_state, {None, "Z"})
+        finally:
+            if parent.poll() is None:
+                os.killpg(os.getpgid(parent.pid), signal.SIGKILL)
+                parent.wait(timeout=5)
+            if parent.stdout is not None:
+                parent.stdout.close()
 
     def test_dashboard_no_legacy_cache_bypasses_shadow_mode(self):
         class Handler:

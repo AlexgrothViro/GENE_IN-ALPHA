@@ -56,16 +56,21 @@ def evaluate(manifest: list[dict[str, str]], metrics: list[dict[str, str]], rati
         metrics_by_batch_target[(metric["batch_id"], metric.get("target", ""))].append(enriched)
 
     output = []
-    positives = [row for row in all_enriched if row["role"] == "positive"]
-    global_positive_failure = len(positives) > 1 and all(
-        row.get("analysis_outcome") != "EVIDENCE_RECOVERED" for row in positives
-    )
+    positives_by_batch = defaultdict(list)
+    for row in all_enriched:
+        if row["role"] == "positive":
+            positives_by_batch[row["batch_id"]].append(row)
     for (batch_id, target), group in sorted(metrics_by_batch_target.items()):
         negatives = [r for r in group if r["role"].startswith("negative_")]
+        batch_positives = positives_by_batch[batch_id]
+        batch_positive_failure = len(batch_positives) > 1 and all(
+            row.get("positive_control_qualification") != "QUALIFIED"
+            for row in batch_positives
+        )
         positive_failed = any(
             r["role"] == "positive"
             and r.get("expected_target", target) in {"", target}
-            and r.get("analysis_outcome") != "EVIDENCE_RECOVERED"
+            and r.get("positive_control_qualification") != "QUALIFIED"
             for r in group
         )
         for sample in (r for r in group if r["role"] == "sample"):
@@ -92,7 +97,7 @@ def evaluate(manifest: list[dict[str, str]], metrics: list[dict[str, str]], rati
                 if sample_hashes & donor_hashes and ratio >= ratio_threshold and ratio > donor_ratio:
                     donor_id, donor_ratio = possible_donor["sample_id"], ratio
             index_hopping = bool(donor_id)
-            if global_positive_failure:
+            if batch_positive_failure:
                 status = "BATCH_GLOBAL_FAILURE"
             elif positive_failed:
                 status = "TARGET_CONTROL_FAILURE"
