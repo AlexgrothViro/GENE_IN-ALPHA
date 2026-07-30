@@ -458,12 +458,7 @@ DIAG_BLAST_DB="${BLAST_DB:-blastdb/${DB}}"
 
 if [[ -n "${BLAST_DB:-}" ]]; then
   echo "  [INFO] Caminho BLAST_DB ativo: $BLAST_DB"
-  missing_db_files=()
-  for ext in nhr nin nsq; do
-    file="${BLAST_DB}.${ext}"
-    [[ -f "$file" ]] || missing_db_files+=("$file")
-  done
-  if (( ${#missing_db_files[@]} > 0 )); then
+  if ! validate_blast_database "$BLAST_DB"; then
     if [[ -s "$REF_FASTA" || -s "data/ref/${DB}.fa" || -s "data/${DB}_db.fa" ]]; then
       echo "  [INFO] BLAST_DB ainda não preparado; será criado automaticamente quando rodar 'make db' ou o pipeline."
     else
@@ -475,14 +470,8 @@ if [[ -n "${BLAST_DB:-}" ]]; then
   fi
 else
   # BLAST_DB não foi passado explicitamente no ambiente
-  # Verifica se os índices já existem no caminho padrão sugerido
-  missing_db_files=()
-  for ext in nhr nin nsq; do
-    file="${DIAG_BLAST_DB}.${ext}"
-    [[ -f "$file" ]] || missing_db_files+=("$file")
-  done
-
-  if (( ${#missing_db_files[@]} == 0 )); then
+  # Verifica o prefixo padrão pela interface do BLAST+, aceitando aliases v5.
+  if validate_blast_database "$DIAG_BLAST_DB"; then
     echo "  [OK] Índices BLAST autodetectados no caminho padrão: $DIAG_BLAST_DB"
   else
     if [[ -s "$REF_FASTA" || -s "data/ref/${DB}.fa" || -s "data/${DB}_db.fa" ]]; then

@@ -162,7 +162,10 @@ ptv-fasta-legacy: ptv-fasta
 	ln -sf "$(abspath $(REF_FASTA))" data/$(DB)_db.fa
 blastdb: ptv-fasta
 	mkdir -p $(dir $(BLAST_DB))
-	if [[ -s "$(BLAST_DB).nhr" && -s "$(BLAST_DB).nin" && -s "$(BLAST_DB).nsq" && "$(BLAST_DB).nhr" -nt "$(REF_FASTA)" ]]; then
+	source "$(SCRIPTS_DIR)/lib/common.sh"
+	DB_MARKER=""
+	if [[ -s "$(BLAST_DB).nal" ]]; then DB_MARKER="$(BLAST_DB).nal"; elif [[ -s "$(BLAST_DB).nhr" ]]; then DB_MARKER="$(BLAST_DB).nhr"; fi
+	if validate_blast_database "$(BLAST_DB)" && [[ -n "$$DB_MARKER" && "$$DB_MARKER" -nt "$(REF_FASTA)" ]]; then
 		echo "[INFO] BLAST DB já existe e está atualizado: $(BLAST_DB)"
 	else
 		echo "[INFO] Gerando BLAST DB em $(BLAST_DB) a partir de $(REF_FASTA)"

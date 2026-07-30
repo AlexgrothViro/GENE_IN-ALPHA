@@ -581,8 +581,8 @@ else
   make -C "$REPO_ROOT" "$DB_TARGET" DB="$DB"
 fi
 
-if [[ ! -f "${BLAST_DB}.nhr" ]]; then
-  log_fatal "Banco BLAST nao encontrado em ${BLAST_DB}.nhr — Verifique se a criacao do banco de dados terminou com sucesso."
+if ! validate_blast_database "$BLAST_DB"; then
+  log_fatal "Banco BLAST ausente, incompleto ou ilegível no prefixo ${BLAST_DB} — a preparação não produziu um banco consultável por blastdbcmd."
 fi
 
 # ── Etapa 2.5: QC com fastp (antes da filtragem de hospedeiro e montagem) ────

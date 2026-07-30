@@ -28,7 +28,7 @@ OUT="${OUTDIR}/${SAMPLE}_k${KMER}_vs_db.tsv"
 mkdir -p "$OUTDIR"
 
 check_file "$CONTIGS"
-check_file "${DB}.nhr"
+check_blast_database "$DB"
 
 log_info "Rodando blastn contra $DB..."
 BLAST_TASK="${BLAST_TASK:-blastn}"

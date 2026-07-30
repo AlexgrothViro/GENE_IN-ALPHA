@@ -31,6 +31,20 @@ class DbManagerContractTests(unittest.TestCase):
         self.assertIn('fetch_ncbi_fasta "$REF_TMP"', manager)
         self.assertIn('input_validation.py" fasta "$REF_TMP', manager)
 
+    def test_all_runtime_preflights_accept_blast_v5_aliases(self):
+        common = (ROOT / "scripts" / "lib" / "common.sh").read_text(encoding="utf-8")
+        pipeline = (ROOT / "scripts" / "20_run_pipeline.sh").read_text(encoding="utf-8")
+        legacy_blast = (ROOT / "scripts" / "02_run_blast.sh").read_text(encoding="utf-8")
+        environment = (ROOT / "scripts" / "00_check_env.sh").read_text(encoding="utf-8")
+
+        self.assertIn("validate_blast_database()", common)
+        self.assertIn('blastdbcmd -db "$database" -info', common)
+        self.assertIn('validate_blast_database "$BLAST_DB"', pipeline)
+        self.assertIn('check_blast_database "$DB"', legacy_blast)
+        self.assertIn('validate_blast_database "$DIAG_BLAST_DB"', environment)
+        self.assertNotIn('${BLAST_DB}.nhr', pipeline)
+        self.assertNotIn('${DB}.nhr', legacy_blast)
+
 
 if __name__ == "__main__":
     unittest.main()

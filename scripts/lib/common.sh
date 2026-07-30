@@ -34,6 +34,23 @@ check_file() {
   fi
 }
 
+# Validate the database through the BLAST+ public interface instead of
+# assuming a particular on-disk layout. This accepts both traditional
+# single-volume databases and v5 aliases promoted to immutable generations.
+validate_blast_database() {
+  local database="$1"
+  command -v blastdbcmd >/dev/null 2>&1 || return 127
+  blastdbcmd -db "$database" -info >/dev/null 2>&1
+}
+
+check_blast_database() {
+  local database="$1"
+  command -v blastdbcmd >/dev/null 2>&1 || \
+    log_error "blastdbcmd não encontrado no PATH; instale BLAST+ antes de validar o banco."
+  validate_blast_database "$database" || \
+    log_error "Banco BLAST ausente, incompleto ou ilegível no prefixo: $database"
+}
+
 # Download via EDirect with bounded retries. The caller must validate the
 # temporary FASTA before promoting it to the canonical cache.
 fetch_ncbi_fasta() {
