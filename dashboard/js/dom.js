@@ -1,5 +1,22 @@
+export function setText(node, value) {
+  node.textContent = value == null ? "" : String(value);
+  return node;
+}
+
 export function clearChildren(node) {
-  node.replaceChildren();
+  if (typeof node.replaceChildren === "function") {
+    node.replaceChildren();
+  } else {
+    while (node.firstChild) node.removeChild(node.firstChild);
+  }
+  return node;
+}
+
+export function replaceContent(node, ...children) {
+  clearChildren(node);
+  children.forEach((child) => {
+    if (child != null) node.append(child);
+  });
   return node;
 }
 

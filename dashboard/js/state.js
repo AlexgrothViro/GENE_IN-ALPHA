@@ -22,6 +22,11 @@ export function createStore(initial = {}) {
       subscribers.forEach((subscriber) => subscriber(state));
       return state;
     },
+    replace(next) {
+      state = next;
+      subscribers.forEach((subscriber) => subscriber(state));
+      return state;
+    },
     subscribe(subscriber) {
       subscribers.add(subscriber);
       return () => subscribers.delete(subscriber);

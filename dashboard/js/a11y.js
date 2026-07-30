@@ -1,3 +1,13 @@
+export function setBusy(node, busy) {
+  node.setAttribute("aria-busy", busy ? "true" : "false");
+  return node;
+}
+
+export function setExpanded(node, expanded) {
+  node.setAttribute("aria-expanded", expanded ? "true" : "false");
+  return node;
+}
+
 export function setHidden(node, hidden) {
   const value = Boolean(hidden);
   node.hidden = value;

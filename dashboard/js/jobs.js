@@ -15,3 +15,23 @@ export function isActiveJobStatus(status) {
 export function isTerminalJobStatus(status) {
   return TERMINAL_JOB_STATES.includes(status);
 }
+
+export function describeJob(job = {}) {
+  const status = canonicalExecutionStatus(job);
+  return Object.freeze({
+    status,
+    active: isActiveJobStatus(status),
+    terminal: isTerminalJobStatus(status),
+    warning: status === "done_with_warning",
+    blocked: status === "blocked",
+    cancelled: status === "cancelled",
+    failed: status === "failed",
+  });
+}
+
+export function extractJobId(payload) {
+  if (payload && typeof payload.job_id === "string" && payload.job_id.trim()) {
+    return payload.job_id.trim();
+  }
+  return null;
+}

@@ -1,5 +1,6 @@
 import { initializeGuidedDashboard } from "./js/guided.js";
-import { isActiveJobStatus } from "./js/jobs.js";
+import { extractJobId, isActiveJobStatus } from "./js/jobs.js";
+import { escapeHTML, parseTSV, renderTSVTable } from "./js/results.js";
 
 // Defensive element guards - get elements safely
 const getEl = (id) => {
@@ -342,47 +343,6 @@ const fetchSamples = async () => {
 
 const openRunArtifact = (runDir, fileType) => {
   window.open(`/api/history/file?run=${encodeURIComponent(runDir)}&type=${encodeURIComponent(fileType)}`, "_blank");
-};
-
-const EVIDENCE_CLASS_ROW = {
-  STRONG: "tsv-row-strong",
-  STRONG_DIVERGENT: "tsv-row-strong-divergent",
-  MODERATE: "tsv-row-moderate",
-  WEAK_RECOVERABLE: "tsv-row-weak-recoverable",
-  REVIEW: "tsv-row-review",
-};
-
-const parseTSV = (text) => {
-  const lines = text.split(/\r?\n/).filter((l) => l.trim());
-  if (!lines.length) return { headers: [], rows: [] };
-  const headers = lines[0].split("\t");
-  const rows = lines.slice(1).map((l) => l.split("\t"));
-  return { headers, rows };
-};
-
-const escapeHTML = (value) =>
-  String(value ?? "").replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;",
-  }[c]));
-
-const renderTSVTable = ({ headers, rows }) => {
-  if (!headers.length) return '<p class="tsv-empty">Arquivo vazio ou sem dados.</p>';
-
-  const classIdx = headers.findIndex((h) => h === "evidence_class");
-
-  const ths = headers.map((h) => `<th>${escapeHTML(h)}</th>`).join("");
-  const trs = rows.map((cells) => {
-    const cls = classIdx >= 0 ? (cells[classIdx] || "").trim() : "";
-    const rowClass = EVIDENCE_CLASS_ROW[cls] || "";
-    const tds = headers.map((_, i) => `<td>${escapeHTML(cells[i] !== undefined ? cells[i] : "")}</td>`).join("");
-    return `<tr class="${rowClass}">${tds}</tr>`;
-  }).join("");
-
-  return `<table class="tsv-table"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`;
 };
 
 const openLabeledTSV = async (runDir) => {
@@ -777,14 +737,6 @@ const rebuildEnvironment = async () => {
 };
 
 /** Validate and extract job_id from an API response object, logging a warning if missing. */
-const extractJobId = (data, context = "") => {
-  if (!data || typeof data.job_id !== "string" || !data.job_id.trim()) {
-    console.error(`${context} Resposta sem job_id:`, data);
-    return null;
-  }
-  return data.job_id.trim();
-};
-
 const runAction = async (action, params = {}) => {
   if (action === "advanced_analysis") {
     if (advStatusEl) advStatusEl.textContent = "Iniciando...";
