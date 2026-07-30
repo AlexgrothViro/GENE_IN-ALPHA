@@ -210,7 +210,7 @@ if ! python3 "${SCRIPT_DIR}/evidence/phylogeny_gate.py" "${GATE_ARGS[@]}"; then
 
 Os critérios operacionais de comprimento, sítios informativos, qualidade, painel taxonômico ou disponibilidade do IQ-TREE não foram atendidos.
 
-Consulte o arquivo de auditoria: `${PHYLOGENY_GATE}`.
+Consulte o arquivo de auditoria: \`${PHYLOGENY_GATE}\`.
 
 Este bloqueio não altera a classificação oficial Gene-In 1.1.
 EOF

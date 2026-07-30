@@ -78,6 +78,17 @@ class DashboardGuidedContractTests(unittest.TestCase):
             self.html,
         )
 
+    def test_complementary_analysis_exposes_real_artifact_contract(self):
+        advanced_script = (REPO_ROOT / "scripts" / "21_run_advanced_analysis.sh").read_text(encoding="utf-8")
+        jobs = (REPO_ROOT / "scripts" / "dashboard" / "jobs.py").read_text(encoding="utf-8")
+        self.assertIn(r"\`${PHYLOGENY_GATE}\`", advanced_script)
+        for artifact in (
+            "advanced_alignment.fa", "advanced_tree.nwk", "advanced_gate.json",
+            "advanced_hits.fa", "advanced_refs.fa", "advanced_summary.tsv",
+        ):
+            self.assertIn(artifact, jobs)
+        self.assertIn('type=advanced_report', (REPO_ROOT / "dashboard" / "app.js").read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

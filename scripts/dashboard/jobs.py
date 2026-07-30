@@ -414,11 +414,22 @@ def find_log_path(metadata):
     return None
 
 
+def find_advanced_path(metadata, filename):
+    sample = metadata.get("sample")
+    params = metadata.get("params") or {}
+    kmer = str(params.get("kmer") or 31)
+    if not sample:
+        return None
+    candidate = get_repo_root() / "results" / "phylogeny" / f"{sample}_k{kmer}" / filename
+    return candidate if candidate.exists() else None
+
+
 def find_advanced_report_path(sample):
     repo_root = get_repo_root()
-    candidate = repo_root / "results" / "reports" / f"{sample}_advanced_report.md"
-    if candidate.exists():
-        return candidate
+    for name in (f"{sample}_advanced_report.md", f"{sample}_advanced_evidence.md"):
+        candidate = repo_root / "results" / "reports" / name
+        if candidate.exists():
+            return candidate
     return None
 
 
@@ -444,16 +455,27 @@ def snapshot_run_artifacts(metadata):
 
     copied = []
     if sample:
+        report_path = (
+            find_advanced_report_path(sample)
+            if metadata.get("action") == "advanced_analysis"
+            else find_report_path(sample)
+        )
         targets = [
             (find_blast_raw_path(sample), "blast.tsv"),
             (find_blast_path(sample), "labeled_hits.tsv"),
             (find_adjusted_identity_path(sample), "adj_identity.tsv"),
             (find_hit_contigs_fasta_path(sample), "hit_contigs.fasta"),
             (find_assembly_contigs_path(sample), "assembly_contigs.fa"),
-            (find_report_path(sample), "report.md"),
+            (report_path, "report.md"),
             (find_advanced_report_path(sample), "advanced_report.md"),
             (find_assembly_summary_path(sample), "assembly_summary.json"),
             (find_log_path(metadata), "run.log"),
+            (find_advanced_path(metadata, "alignment.fa"), "advanced_alignment.fa"),
+            (find_advanced_path(metadata, "tree.nwk"), "advanced_tree.nwk"),
+            (find_advanced_path(metadata, "phylogeny_gate.json"), "advanced_gate.json"),
+            (find_advanced_path(metadata, "hits.fa"), "advanced_hits.fa"),
+            (find_advanced_path(metadata, "refs.fa"), "advanced_refs.fa"),
+            (find_advanced_path(metadata, "hits_summary.tsv"), "advanced_summary.tsv"),
         ]
         for src, dest_name in targets:
             if src and src.exists():
@@ -484,6 +506,12 @@ def history_artifact_paths(run_dir):
         "run_adj_identity_tsv": "adj_identity.tsv",
         "run_hit_contigs_fasta": "hit_contigs.fasta",
         "run_assembly_contigs_fasta": "assembly_contigs.fa",
+        "run_advanced_alignment": "advanced_alignment.fa",
+        "run_advanced_tree": "advanced_tree.nwk",
+        "run_advanced_gate": "advanced_gate.json",
+        "run_advanced_hits": "advanced_hits.fa",
+        "run_advanced_refs": "advanced_refs.fa",
+        "run_advanced_summary": "advanced_summary.tsv",
     }
     return {
         key: filename
@@ -875,9 +903,9 @@ def run_job(job_id, action, params):
                         )
             elif rc == 0:
                 jobs[job_id]["status"] = "done"
-                if action in {"pipeline", "evidence_pipeline"}:
+                if action in {"pipeline", "evidence_pipeline", "advanced_analysis"}:
                     sample = params.get("sample", "")
-                    snapshot_run_artifacts({
+                    snapshot_metadata = {
                         "id": job_id,
                         "run_id": job_id,
                         "sample": sample,
@@ -888,7 +916,13 @@ def run_job(job_id, action, params):
                         "command": command_text,
                         "log_file": str(log_file),
                         "status": "done",
-                    })
+                    }
+                    run_dir = snapshot_run_artifacts(snapshot_metadata)
+                    jobs[job_id]["run"] = {
+                        "run_dir": Path(run_dir).name if run_dir else job_id,
+                        "sample": sample,
+                        "paths": history_artifact_paths(Path(run_dir)) if run_dir else {},
+                    }
             else:
                 failure_type = classify_evidence_failure(output_buf)
                 jobs[job_id].update({
@@ -1045,6 +1079,12 @@ def resolve_history_file(run_dir, file_type):
         "hit_contigs_fasta": "hit_contigs.fasta",
         "hit_contigs": "hit_contigs.fasta",
         "assembly_contigs_fasta": "assembly_contigs.fa",
+        "run_advanced_alignment": "advanced_alignment.fa",
+        "run_advanced_tree": "advanced_tree.nwk",
+        "run_advanced_gate": "advanced_gate.json",
+        "run_advanced_hits": "advanced_hits.fa",
+        "run_advanced_refs": "advanced_refs.fa",
+        "run_advanced_summary": "advanced_summary.tsv",
         "assembly_summary": "assembly_summary.json",
         "sample_evidence": "sample_evidence.json",
     }

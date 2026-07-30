@@ -923,7 +923,7 @@ const pollJob = (jobId, action) => {
           const runDir = data.run?.run_dir || "";
           if (advReportContentEl && advReportViewerEl && runDir) {
             try {
-              const res = await fetch(`/api/history/file?run=${encodeURIComponent(runDir)}&type=report`);
+              const res = await fetch(`/api/history/file?run=${encodeURIComponent(runDir)}&type=advanced_report`);
               if (res.ok) {
                 advReportContentEl.textContent = await res.text();
                 advReportViewerEl.hidden = false;
@@ -931,6 +931,27 @@ const pollJob = (jobId, action) => {
             } catch (err) {
               console.error("Falha ao carregar resumo avançado", err);
             }
+          }
+          const advancedArtifacts = getEl("adv-artifacts");
+          if (advancedArtifacts) {
+            advancedArtifacts.replaceChildren();
+            const labels = {
+              run_advanced_alignment: "⬇ Alinhamento FASTA",
+              run_advanced_tree: "⬇ Árvore Newick",
+              run_advanced_gate: "⬇ Gates JSON",
+              run_advanced_hits: "⬇ Hits FASTA",
+              run_advanced_refs: "⬇ Referências FASTA",
+              run_advanced_summary: "⬇ Resumo TSV",
+            };
+            Object.entries(labels).forEach(([key, label]) => {
+              if (!runDir || !data.run?.paths?.[key]) return;
+              const link = document.createElement("a");
+              link.className = "btn btn--secondary";
+              link.textContent = label;
+              link.href = `/api/history/file?run=${encodeURIComponent(runDir)}&type=${encodeURIComponent(key)}`;
+              link.download = "";
+              advancedArtifacts.append(link);
+            });
           }
         } else if (action === "assembly_only") {
           const runDir = data.run?.run_dir || "";
