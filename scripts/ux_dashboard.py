@@ -19,11 +19,13 @@ from dashboard.config import (
     REPO_ROOT, DASHBOARD_DIR, LOG_DIR, RUNS_DIR, TARGETS_FILE,
     CONFIG_ENV_PRIMARY, CONFIG_ENV_EXAMPLE, CONFIG_ENV_LEGACY,
     ENVIRONMENT_YML, INSTALL_WSL_SCRIPT, JAVASCRIPT_MODULES,
+    BUNDLE_ENV_BIN,
     PREFLIGHT_TOOLS, ASSEMBLER_TOOLS, SUPPORTED_ENV_KEYS, _DB_ALIAS,
     require_sample_id, iso_now, is_loopback_host, get_preflight_status,
     list_targets, list_db_profiles, get_config_env_path, parse_env_file,
     load_config_env, validate_config_updates,
     validate_host_index, host_env_from_params, get_environment_status, tool_versions,
+    runtime_environment,
 )
 from dashboard.jobs import (
     EVIDENCE_SERVICE, jobs, jobs_lock, MAX_OUTPUT_LINES, JOB_TTL_SECONDS,

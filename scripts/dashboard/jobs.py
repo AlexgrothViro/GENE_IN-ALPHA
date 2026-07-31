@@ -31,6 +31,7 @@ from run_state import mutate_state_file, reserve_state as reserve_evidence_state
 from analysis_profiles import load_profiles, resolve_profile
 from dashboard.config import (
     LOG_DIR, RUNS_DIR, REPO_ROOT, iso_now, _DB_ALIAS, host_env_from_params,
+    runtime_environment,
     load_config_env, validate_config_updates, save_config_env,
     get_repo_root, get_runs_dir,
 )
@@ -773,7 +774,7 @@ def run_job(job_id, action, params):
             )
         return
 
-    env = dict(os.environ)
+    env = runtime_environment()
 
     try:
         env.update(host_env_from_params(params))

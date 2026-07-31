@@ -32,6 +32,10 @@ CONFIG_ENV_EXAMPLE = REPO_ROOT / "config" / "picornavirus.env.example"
 CONFIG_ENV_LEGACY = REPO_ROOT / "config.env"
 ENVIRONMENT_YML = REPO_ROOT / "environment.yml"
 INSTALL_WSL_SCRIPT = REPO_ROOT / "bundle" / "install_wsl.sh"
+BUNDLE_ENV_BIN = Path(
+    os.environ.get("GENEIN_ENV_BIN", "")
+    or (Path.home() / ".gene-in-bundle" / "env" / "bin")
+)
 
 JAVASCRIPT_MODULES = frozenset({
     "a11y.js", "api.js", "config.js", "dom.js", "evidence.js",
@@ -115,8 +119,15 @@ def is_loopback_host(host):
 
 
 def get_preflight_status():
-    """Inspect the same inherited PATH used by dashboard jobs."""
-    effective_path = os.environ.get("PATH", os.defpath)
+    """Inspect the runtime PATH used by the dashboard and its jobs.
+
+    The dashboard is frequently started directly with the system Python,
+    while the scientific tools live in the isolated micromamba environment.
+    Include that environment when it exists so the preflight result reflects
+    the runtime that pipeline jobs can actually use.
+    """
+    runtime_env = runtime_environment()
+    effective_path = runtime_env.get("PATH", os.defpath)
     tools = []
     presence = {}
     for name, group, required in PREFLIGHT_TOOLS:
@@ -144,9 +155,27 @@ def get_preflight_status():
         "required_missing": required_missing,
         "assembler_available": assembler_available,
         "path_source": "dashboard_job_environment",
+        "runtime_env_bin": str(BUNDLE_ENV_BIN) if BUNDLE_ENV_BIN.is_dir() else None,
         "checked_at": iso_now(),
         "summary": "Ambiente pronto." if ok else f"Ambiente com pendências: {', '.join(pending)}",
     }
+
+
+def runtime_environment(base=None):
+    """Return an environment with the bundled Gene-In tools on ``PATH``.
+
+    This keeps direct dashboard launches consistent with ``bundle/run.sh``.
+    An explicitly configured ``GENEIN_ENV_BIN`` takes precedence; otherwise
+    the default per-user micromamba environment is used when present.
+    """
+    env = dict(os.environ if base is None else base)
+    env_bin = Path(env.get("GENEIN_ENV_BIN", "") or BUNDLE_ENV_BIN)
+    if env_bin.is_dir():
+        old_path = env.get("PATH", os.defpath)
+        path_parts = [str(env_bin)] + [part for part in old_path.split(os.pathsep) if part]
+        env["PATH"] = os.pathsep.join(dict.fromkeys(path_parts))
+        env["GENEIN_ENV_BIN"] = str(env_bin)
+    return env
 
 
 def list_targets():
@@ -409,6 +438,7 @@ def get_environment_status():
 
 def tool_versions():
     versions = {}
+    runtime_env = runtime_environment()
     for cmd, name in (
         ("blastn -version", "blast"),
         ("bowtie2 --version", "bowtie2"),
@@ -417,7 +447,7 @@ def tool_versions():
         ("spades.py --version", "spades"),
     ):
         try:
-            res = run(cmd.split(), capture_output=True, text=True, check=False)
+            res = run(cmd.split(), env=runtime_env, capture_output=True, text=True, check=False)
             output = (res.stdout or res.stderr or "").strip().splitlines()
             versions[name] = output[0] if output else "Desconhecido"
         except Exception:

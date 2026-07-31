@@ -52,6 +52,13 @@ class DashboardGuidedContractTests(unittest.TestCase):
         self.assertFalse(result["assembler_available"])
         self.assertIn("nenhum montador", result["summary"])
 
+    def test_runtime_environment_preprends_bundled_tool_directory(self):
+        env_bin = REPO_ROOT / "tmp" / "gene-in-env" / "bin"
+        with mock.patch.object(Path, "is_dir", return_value=True):
+            env = dashboard.runtime_environment({"PATH": "/usr/bin", "GENEIN_ENV_BIN": str(env_bin)})
+        self.assertTrue(env["PATH"].startswith(str(env_bin)))
+        self.assertEqual(env["GENEIN_ENV_BIN"], str(env_bin))
+
     def test_environment_status_exposes_environment_file_contract(self):
         result = dashboard.get_environment_status()
         self.assertTrue(result["has_environment_yml"])
